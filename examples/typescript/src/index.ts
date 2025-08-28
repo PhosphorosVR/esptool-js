@@ -19,6 +19,30 @@ const lblConsoleFor = document.getElementById("lblConsoleFor");
 const lblConnTo = document.getElementById("lblConnTo");
 const table = document.getElementById("fileTable") as HTMLTableElement;
 const alertDiv = document.getElementById("alertDiv");
+// Debug panel elements
+const debugLogEl = document.getElementById('debugLog') as HTMLElement | null;
+const debugClearBtn = document.getElementById('debugClearBtn') as HTMLButtonElement | null;
+const debugAutoScrollEl = document.getElementById('debugAutoScroll') as HTMLInputElement | null;
+
+function appendDebugLine(kind: 'tx'|'rx'|'err'|'info', text: string) {
+  if (!debugLogEl) return;
+  const ts = new Date().toISOString().slice(11, 19); // HH:MM:SS
+  const line = document.createElement('div');
+  line.className = `dbg-${kind}`;
+  const label = kind === 'tx' ? '>>' : kind === 'rx' ? '<<' : kind === 'err' ? '!!' : '--';
+  line.textContent = `[${ts}] ${label} ${text}`;
+  debugLogEl.appendChild(line);
+  // Auto-scroll if enabled
+  try {
+    const auto = debugAutoScrollEl ? debugAutoScrollEl.checked : true;
+    if (auto) debugLogEl.scrollTop = debugLogEl.scrollHeight;
+  } catch {}
+}
+
+// Wire Clear button once
+try {
+  debugClearBtn?.addEventListener('click', () => { if (debugLogEl) debugLogEl.innerHTML = ''; });
+} catch {}
 // Connection status UI bits (dot and alert in the Connect card)
 const connStatusDot = document.getElementById("connStatusDot") as HTMLElement | null;
 const connectAlert = document.getElementById("connectAlert") as HTMLElement | null;
@@ -64,11 +88,13 @@ function switchToConsoleTab() {
 
 
 // ---- WiFi Auto-Setup via JSON serial protocol ----
-async function sendJsonCommand(command: string, params?: any, timeoutMs = 15000): Promise<any> {
+async function sendJsonCommand(command: string, params?: any, timeoutMs = 10000): Promise<any> {
   if (!transport) throw new Error("Not connected");
   const cmdObj: any = { commands: [{ command }] };
   if (params !== undefined) cmdObj.commands[0].data = params;
   const payload = JSON.stringify(cmdObj) + "\n";
+  // Log TX
+  try { appendDebugLine('tx', JSON.stringify(cmdObj)); } catch {}
 
   const enc = new TextEncoder();
   const data = enc.encode(payload);
@@ -86,44 +112,144 @@ async function sendJsonCommand(command: string, params?: any, timeoutMs = 15000)
 
   const dec = new TextDecoder();
   let buffer = "";
+  // For scan_networks, remember if we saw a networks array (even if empty)
+  let lastNetworksSeen: any[] | null = null;
   const start = Date.now();
+  const loop = transport.rawRead();
   while (Date.now() - start < timeoutMs) {
-    const loop = transport.rawRead();
     const { value, done } = await loop.next();
     if (done) break;
     if (!value) continue;
-    buffer += dec.decode(value, { stream: true });
+    // Decode only the new chunk, strip ANSI, normalize CRs, then append
+    let chunk = dec.decode(value, { stream: true });
+    chunk = chunk.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r/g, "\n");
+    buffer += chunk;
 
     // Special handling: scan_networks may emit a raw multi-line JSON {"networks":[...]}
     if (command === 'scan_networks') {
-      const m = buffer.match(/\{\s*"networks"\s*:\s*\[([\s\S]*?)\]\s*\}/);
+  const m = buffer.match(/\{\s*"networks"\s*:\s*\[([\s\S]*?)\]\s*\}/);
       if (m && m[0]) {
-        // Return in a format compatible with existing parser
-        return { results: [ JSON.stringify({ result: m[0] }) ] };
-      }
-    }
-
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const obj = JSON.parse(trimmed);
-        return obj;
-      } catch {
-        const startIdx = trimmed.indexOf("{");
-        const endIdx = trimmed.lastIndexOf("}");
-        if (startIdx !== -1 && endIdx > startIdx) {
-          try {
-            const obj = JSON.parse(trimmed.slice(startIdx, endIdx + 1));
-            return obj;
-          } catch {}
+        try {
+          const parsed = JSON.parse(m[0]);
+          const arr = Array.isArray(parsed?.networks) ? parsed.networks : [];
+          if (arr.length > 0) {
+            // Fast-path return when we have non-empty results
+    const out = { networks: arr };
+    try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
+    return out;
+          }
+          // Remember that we saw an empty list so we can return it on timeout
+          lastNetworksSeen = [];
+        } catch {
+          // Fallback to previous compatible format
+      const out = { results: [ JSON.stringify({ result: m[0] }) ] };
+      try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
+      return out;
         }
       }
     }
+  // Find complete JSON objects in the buffer using brace counting, return only responses with results/error
+    let startIdx = buffer.indexOf('{');
+    while (startIdx !== -1) {
+      let brace = 0;
+      let endIdx = -1;
+      for (let i = startIdx; i < buffer.length; i++) {
+        const ch = buffer[i];
+        if (ch === '{') brace++;
+        else if (ch === '}') {
+          brace--;
+          if (brace === 0) { endIdx = i + 1; break; }
+        }
+      }
+      if (endIdx > startIdx) {
+    // Extract the complete JSON string as-is; do not collapse whitespace inside JSON strings
+    const jsonStr = buffer.slice(startIdx, endIdx).trim();
+        // Move buffer forward
+        buffer = buffer.slice(endIdx);
+        try {
+          const obj = JSON.parse(jsonStr);
+          // Special handling for scan_networks: return as soon as we can extract networks
+          if (command === 'scan_networks') {
+            // Helper to find networks array anywhere within nested structures
+            const findNetworks = (o: any): any[] | null => {
+              if (!o) return null;
+              if (Array.isArray(o.networks)) return o.networks;
+              // Unwrap common shapes
+              if (o.result !== undefined) {
+                let p: any = o.result;
+                if (typeof p === 'string') { try { p = JSON.parse(p); } catch {}
+                }
+                const nn = findNetworks(p);
+                if (nn) return nn;
+              }
+              if (Array.isArray(o.results)) {
+                for (let e of o.results) {
+                  if (typeof e === 'string') { try { e = JSON.parse(e); } catch {} }
+                  const nn = findNetworks(e);
+                  if (nn) return nn;
+                }
+              }
+              return null;
+            };
+            const nets = findNetworks(obj);
+            // Return only when we actually have at least one network; otherwise keep reading
+      if (nets) {
+              if (nets.length > 0) {
+        const out = { networks: nets };
+        try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
+        return out;
+              }
+              // Track empty discovery; if nothing else arrives we'll return empty at timeout
+              lastNetworksSeen = [];
+            }
+          }
+
+          if (obj && (Object.prototype.hasOwnProperty.call(obj, 'results') || Object.prototype.hasOwnProperty.call(obj, 'error'))) {
+            // For scan_networks, do not return early on generic results like "Networks scanned";
+            // only return when we have a networks array (handled above), otherwise keep reading.
+            if (command === 'scan_networks') {
+              try { appendDebugLine('rx', JSON.stringify(obj)); } catch {}
+              // continue accumulating for networks payload
+            } else if (command === 'switch_mode') {
+              // Acknowledge typically comes as human text; return immediately when present
+              try { appendDebugLine('rx', JSON.stringify(obj)); } catch {}
+              return obj;
+            } else {
+              try { appendDebugLine('rx', JSON.stringify(obj)); } catch {}
+              return obj;
+            }
+          }
+          // Fast-path: if we're waiting for get_device_mode, try to unwrap mode quickly from typical shapes
+          if (command === 'get_device_mode' && obj && Array.isArray(obj.results) && obj.results.length) {
+            try {
+              let inner: any = obj.results[0];
+              if (typeof inner === 'string') inner = JSON.parse(inner);
+              let payload: any = (inner && typeof inner === 'object' && 'result' in inner) ? inner.result : inner;
+              if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
+              if (payload && (typeof payload.mode === 'string' || typeof payload.value === 'number')) {
+                return obj;
+              }
+            } catch {}
+          }
+        } catch {}
+        // Look for another JSON object in the remaining buffer
+        startIdx = buffer.indexOf('{');
+        continue;
+      } else {
+        // No complete JSON yet, keep accumulating
+        break;
+      }
+    }
   }
-  throw new Error("Timeout waiting for response");
+  // If we were scanning networks and observed an empty list, return it instead of timing out
+  if (command === 'scan_networks' && lastNetworksSeen) {
+    const out = { networks: lastNetworksSeen };
+    try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
+    return out;
+  }
+  const err = new Error("Timeout waiting for response");
+  try { appendDebugLine('err', `${command}: ${err.message}`); } catch {}
+  throw err;
 }
 
 function parseNetworksFromResults(resp: any): Array<{ssid: string; rssi: number; channel: number; auth_mode: number; mac_address?: string}> {
@@ -159,7 +285,7 @@ async function wifiScanAndDisplay() {
   const statusEl = document.getElementById('wifiStatusMsg') as HTMLElement | null;
   try {
     statusEl && (statusEl.textContent = 'Scanning...');
-    await sendJsonCommand('pause', { pause: true }, 5000);
+  await ensurePaused();
     const scanResp = await sendJsonCommand('scan_networks', undefined, 30000);
     const nets = parseNetworksFromResults(scanResp);
     nets.sort((a, b) => (b.rssi || -999) - (a.rssi || -999));
@@ -376,13 +502,49 @@ try {
 
 let device = null;
 let transport: Transport;
-let chip: string = null;
-let esploader: ESPLoader;
-let deviceMac: string = null;
+let chip: string = null; // reserved for flashing context
+let esploader: ESPLoader | null = null;
+let deviceMac: string = null; // reserved for future use
 let lastBaud: number = 115200; // track the active baudrate used for connections
 let isConnected = false;
 // @ts-ignore
 (window as any).isConnected = isConnected;
+// Send "pause" once after a successful Connect to keep device in setup mode
+let initialPauseSent = false;
+// Track whether the device is currently paused (as far as we know)
+let pausedActive = false;
+
+// Helper to ensure the app is paused; if already paused, it's a no-op
+async function ensurePaused(): Promise<boolean> {
+  if (pausedActive) return true;
+  try {
+    await sendJsonCommand('pause', { pause: true }, 3000);
+    pausedActive = true;
+    return true;
+  } catch (e: any) {
+    try { appendDebugLine('info', `ensurePaused failed: ${e?.message || e}`); } catch {}
+    return false;
+  }
+}
+
+// Helper: try to pause the app with a few retries to cover post-connect settle time
+async function pauseWithRetries(initialDelayMs = 600, attempts = 3, retryDelayMs = 500): Promise<boolean> {
+  try { await new Promise(r => setTimeout(r, initialDelayMs)); } catch {}
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await sendJsonCommand('pause', { pause: true }, 3000);
+  pausedActive = true;
+      return true;
+    } catch (e:any) {
+      if (i === attempts - 1) {
+        try { appendDebugLine('info', `Initial pause failed after ${attempts} attempts: ${e?.message || e}`); } catch {}
+        return false;
+      }
+      try { await new Promise(r => setTimeout(r, retryDelayMs)); } catch {}
+    }
+  }
+  return false;
+}
 
 disconnectButton.style.display = "none";
 traceButton.style.display = "none";
@@ -407,24 +569,44 @@ function extractDeviceInfo(dev: any): { serial?: string; product?: string; manuf
   return out;
 }
 
-function cleanChipName(name: string): string {
-  // Remove any parenthetical info like (QFN56), (revision v1.0), etc.
-  return typeof name === "string" ? name.replace(/\s*\(.*?\)/g, "").trim() : name;
-}
+// function cleanChipName(name: string): string {
+//   // Remove any parenthetical info like (QFN56), (revision v1.0), etc.)
+//   return typeof name === "string" ? name.replace(/\s*\(.*?\)/g, "").trim() : name;
+// }
 
 // Ensure we have a usable, connected transport at the desired baud.
 async function ensureTransportConnected(baud?: number) {
   if (device === null) {
     device = await serialLib.requestPort({});
   }
-  if (transport) {
-    try { await transport.disconnect(); } catch {}
-    try { await transport.waitForUnlock(500); } catch {}
-  }
-  transport = new Transport(device, true);
   const b = baud || lastBaud || parseInt(baudrates?.value || '115200');
   lastBaud = b;
-  await transport.connect(b);
+  if (!transport) {
+    transport = new Transport(device, true);
+  }
+  try {
+    await transport.connect(b);
+  } catch (_) {
+    // If connect fails (stale reader, prior state), rebuild transport once
+    try { await transport.disconnect(); } catch {}
+    try { await transport.waitForUnlock(500); } catch {}
+    transport = new Transport(device, true);
+    await transport.connect(b);
+  }
+}
+
+// Prepare ESPLoader only when needed (flash/erase). This will toggle into bootloader and handshake.
+async function ensureEsploaderReady(): Promise<void> {
+  // Always ensure a fresh transport connection first
+  await ensureTransportConnected();
+  const flashOptions = {
+    transport,
+    baudrate: lastBaud || parseInt(baudrates?.value || '115200'),
+    terminal: espLoaderTerminal,
+    debugLogging: debugLogging.checked,
+  } as LoaderOptions;
+  esploader = new ESPLoader(flashOptions);
+  chip = await esploader.main();
 }
 
 /**
@@ -547,47 +729,23 @@ loadPrebuiltManifest();
 
 connectButton.onclick = async () => {
   try {
-  // Prepare UI: clear any alert and set dot to disconnected until success
-  hideConnectAlert();
-  updateConnStatusDot(false);
-  // If console loop is running, stop it before (re)connecting
-  isConsoleClosed = true;
-    if (device === null) {
-      device = await serialLib.requestPort({});
-    }
-    // Always create a fresh Transport on (re)connect to avoid stale locks
-    transport = new Transport(device, true);
-    const flashOptions = {
-      transport,
-      baudrate: parseInt(baudrates.value),
-      terminal: espLoaderTerminal,
-      debugLogging: debugLogging.checked,
-    } as LoaderOptions;
+    // Prepare UI
+    hideConnectAlert();
+    updateConnStatusDot(false);
+    isConsoleClosed = true;
+
+    // Select port and connect to the running application (not bootloader)
+    await ensureTransportConnected(parseInt(baudrates.value));
     lastBaud = parseInt(baudrates.value) || 115200;
-    esploader = new ESPLoader(flashOptions);
 
-    chip = await esploader.main();
-    try {
-      deviceMac = await esploader.chip.readMac(esploader);
-    } catch (e) {
-      console.warn("Could not read MAC:", e);
-      deviceMac = null;
-    }
-
-  // Temporarily broken
-  // await esploader.flashId();
-  console.log("Settings done for :" + chip);
-  lblBaudrate.style.display = "none";
-  // Build a friendly connection info line (chip · VID/PID · baud)
-  const info = extractDeviceInfo(transport?.device);
-  const parts: string[] = [];
-  if (chip) parts.push(cleanChipName(chip));
-  if (info.serial && info.product) parts.push(`${info.product} (SN ${info.serial})`);
-  else if (info.serial) parts.push(`SN ${info.serial}`);
-  else if (info.product && info.manufacturer) parts.push(`${info.manufacturer} ${info.product}`);
-  if (deviceMac) parts.push(deviceMac.toUpperCase());
-  if (baudrates?.value) parts.push(`${baudrates.value} baud`);
-  lblConnTo.innerHTML = `Connected: ${parts.join(" · ")}`;
+    // Build connection info from USB descriptors and baud
+    const info = extractDeviceInfo(transport?.device);
+    const parts: string[] = [];
+    if (info.product && info.manufacturer) parts.push(`${info.manufacturer} ${info.product}`);
+    else if (info.product) parts.push(info.product);
+    if (info.serial) parts.push(`SN ${info.serial}`);
+    if (baudrates?.value) parts.push(`${baudrates.value} baud`);
+    lblConnTo.innerHTML = `Connected: ${parts.join(" · ")}`;
     lblConnTo.style.display = "block";
     baudrates.style.display = "none";
     connectButton.style.display = "none";
@@ -595,26 +753,27 @@ connectButton.onclick = async () => {
     traceButton.style.display = "initial";
     eraseButton.style.display = "initial";
     filesDiv.style.display = "initial";
-  isConnected = true;
-  // @ts-ignore
-  (window as any).isConnected = true;
-  // Update status indicator to connected
-  updateConnStatusDot(true);
-  hideConnectAlert();
-  // Do not force-hide console panel; tabs manage visibility
-  // Explicitly switch to Flashing tab after connect
-  const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
-  if (tabProgram) tabProgram.click();
-  // Begin monitoring port in case it disappears
-  startPortPresenceMonitor();
-  } catch (e) {
+
+    isConnected = true;
+    // @ts-ignore
+    (window as any).isConnected = true;
+    updateConnStatusDot(true);
+    hideConnectAlert();
+    // Switch to Flashing tab on connect to keep previous behavior
+    const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
+    if (tabProgram) tabProgram.click();
+    startPortPresenceMonitor();
+
+  // One-time initial pause with retries to keep app in setup mode
+  if (!initialPauseSent) { initialPauseSent = true; await pauseWithRetries(); }
+  } catch (e:any) {
     console.error(e);
-    term.writeln(`Error: ${e.message}`);
-  isConnected = false;
-  // @ts-ignore
-  (window as any).isConnected = false;
-  updateConnStatusDot(false);
-  showConnectAlert(`Connection failed: ${e?.message || e}`);
+    term.writeln(`Error: ${e?.message || e}`);
+    isConnected = false;
+    // @ts-ignore
+    (window as any).isConnected = false;
+    updateConnStatusDot(false);
+    showConnectAlert(`Connection failed: ${e?.message || e}`);
   }
 };
 
@@ -639,7 +798,9 @@ eraseButton.onclick = async () => {
   isConsoleClosed = true;
   // Switch to Console view when erase starts
   switchToConsoleTab();
-    await esploader.eraseFlash();
+  await ensureEsploaderReady();
+  await esploader!.eraseFlash();
+  try { await esploader!.after(); } catch {}
   } catch (e) {
     console.error(e);
     term.writeln(`Error: ${e.message}`);
@@ -726,6 +887,9 @@ async function handlePortDisconnected(msg?: string) {
   try { await transport?.disconnect?.(); } catch {}
   try { await transport?.waitForUnlock?.(500); } catch {}
   stopPortPresenceMonitor();
+  // Allow initial pause again on next connect
+  initialPauseSent = false;
+  pausedActive = false;
   // Reset UI similar to manual Disconnect
   try { term.reset(); } catch {}
   try { lblBaudrate.style.display = "initial"; } catch {}
@@ -795,6 +959,9 @@ disconnectButton.onclick = async () => {
   isConnected = false;
   // @ts-ignore
   (window as any).isConnected = false;
+  // Allow initial pause again on next connect
+  initialPauseSent = false;
+  pausedActive = false;
 };
 
 let isConsoleClosed = false;
@@ -945,6 +1112,101 @@ if (wifiConnectButton) {
   };
 }
 
+// ---- Device Mode (WiFi/UVC/Auto) ----
+async function getDeviceMode(): Promise<string | null> {
+  try {
+  // Ensure the device stays in setup mode so it responds to control commands (one-time per session)
+  await ensurePaused();
+  const resp = await sendJsonCommand('get_device_mode', {}, 15000);
+    const arr = resp?.results || [];
+    if (arr.length) {
+      // Results entries may be JSON strings or already-parsed objects
+      let inner: any = arr[0];
+      try { if (typeof inner === 'string') inner = JSON.parse(inner); } catch {}
+      let payload: any = (inner && typeof inner === 'object' && 'result' in inner) ? inner.result : inner;
+      if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch {}
+      }
+      const mode = payload?.mode;
+      return typeof mode === 'string' ? mode : null;
+    }
+  } catch {}
+  return null;
+}
+
+async function setDeviceMode(mode: 'wifi'|'uvc'|'auto'): Promise<boolean> {
+  try {
+  const resp = await sendJsonCommand('switch_mode', { mode }, 5000);
+    return !resp?.error;
+  } catch { return false; }
+}
+
+function updateModeUI(mode: string | null) {
+  const statusEl = document.getElementById('modeStatus');
+  const msgEl = document.getElementById('modeMsg');
+  const radios = document.querySelectorAll<HTMLInputElement>('input[name="devMode"]');
+  if (statusEl) statusEl.textContent = mode || '-';
+  if (msgEl) msgEl.textContent = '';
+  radios.forEach(r => { r.checked = (mode && r.value.toLowerCase() === mode.toLowerCase()); });
+}
+
+async function refreshMode() {
+  const msgEl = document.getElementById('modeMsg');
+  try {
+    // Use existing transport if available to avoid extra connect overhead
+    if (!transport) {
+      await ensureTransportConnected();
+    }
+    const mode = await getDeviceMode();
+    updateModeUI(mode);
+    if (msgEl) msgEl.textContent = mode ? '' : 'Unable to read mode';
+  } catch (e:any) {
+    if (msgEl) msgEl.textContent = `Error: ${e?.message || e}`;
+  }
+}
+
+function wireModePanel() {
+  const btnRefresh = document.getElementById('modeRefreshButton') as HTMLButtonElement | null;
+  const btnApply = document.getElementById('modeApplyButton') as HTMLButtonElement | null;
+  if (btnRefresh) btnRefresh.onclick = () => { refreshMode(); };
+  if (btnApply) btnApply.onclick = async () => {
+    const msgEl = document.getElementById('modeMsg');
+    const selected = document.querySelector<HTMLInputElement>('input[name="devMode"]:checked');
+    if (!selected) { if (msgEl) msgEl.textContent = 'Select a mode'; return; }
+    try {
+  if (!transport) { await ensureTransportConnected(); }
+      const ok = await setDeviceMode(selected.value as any);
+      if (ok) {
+        if (msgEl) msgEl.textContent = 'Mode updated. Please restart the device for changes to take effect.';
+        await refreshMode();
+      } else {
+        if (msgEl) msgEl.textContent = 'Failed to set mode';
+      }
+    } catch (e:any) {
+      if (msgEl) msgEl.textContent = `Error: ${e?.message || e}`;
+    }
+  };
+}
+
+// Wire on load
+try { wireModePanel(); } catch {}
+
+// Also auto-refresh the mode panel when the Device Mode subtab is opened
+try {
+  const toolTabs = document.getElementById('toolTabs');
+  if (toolTabs) {
+    toolTabs.addEventListener('click', (ev) => {
+      const t = ev.target as HTMLElement;
+      const li = t?.closest?.('li.subtab') as HTMLElement | null;
+      if (li && li.dataset.target === 'tool-mode') {
+        // Only refresh if connected
+        // @ts-ignore
+        if ((window as any).isConnected) refreshMode();
+      }
+    });
+  }
+} catch {}
+
 /**
  * Validate the provided files images and offset to see if they're valid.
  * @returns {string} Program input validation result
@@ -1058,6 +1320,7 @@ programButton.onclick = async () => {
   switchToConsoleTab();
   // Stop console loop during flashing to avoid interleaved reads
   isConsoleClosed = true;
+  await ensureEsploaderReady();
   const flashOptions: FlashOptions = {
       fileArray: fileArray,
       flashSize: "keep",
@@ -1069,8 +1332,8 @@ programButton.onclick = async () => {
       },
       calculateMD5Hash: (image) => CryptoJS.MD5(CryptoJS.enc.Latin1.parse(image)),
     } as FlashOptions;
-    await esploader.writeFlash(flashOptions);
-    await esploader.after();
+    await esploader!.writeFlash(flashOptions);
+    await esploader!.after();
   } catch (e) {
     console.error(e);
     term.writeln(`Error: ${e.message}`);

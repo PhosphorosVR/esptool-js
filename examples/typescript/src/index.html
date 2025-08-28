@@ -48,8 +48,8 @@
                                         </select>
                                     </label>
                                     <label class="toggle" for="debugLogging">
-                                        <input type="checkbox" id="debugLogging" />
-                                        Show Debug log
+                                        <input type="checkbox" id="debugLogging" checked />
+                                        Debug
                                     </label>
                                 </div>
                                 <div class="row mt-8">
@@ -176,17 +176,66 @@
                             <div id="tool-mdns" class="tool-panel" role="tabpanel" style="display:none;"></div>
                             <div id="tool-uvc" class="tool-panel" role="tabpanel" style="display:none;"></div>
                             <div id="tool-stream" class="tool-panel" role="tabpanel" style="display:none;"></div>
-                            <div id="tool-mode" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-mode" class="tool-panel" role="tabpanel" style="display:none;">
+                                <div class="row">
+                                    <span class="muted">Current mode:</span>
+                                    <strong id="modeStatus" style="margin-left:8px;">-</strong>
+                                    <button class="btn btn-secondary" id="modeRefreshButton" type="button" style="margin-left:12px;">Refresh</button>
+                                </div>
+                                <div class="row mt-8" id="modeChoices">
+                                    <label class="radio" style="margin-right:16px;"><input type="radio" name="devMode" value="wifi"> WiFi</label>
+                                    <label class="radio" style="margin-right:16px;"><input type="radio" name="devMode" value="uvc"> UVC</label>
+                                    <label class="radio"><input type="radio" name="devMode" value="auto"> Auto</label>
+                                </div>
+                                <div class="row mt-8">
+                                    <button class="btn btn-primary" id="modeApplyButton" type="button">Apply</button>
+                                    <span id="modeMsg" class="muted" style="margin-left:12px;"></span>
+                                </div>
+                            </div>
                             <div id="tool-pwm" class="tool-panel" role="tabpanel" style="display:none;"></div>
                             <div id="tool-logs" class="tool-panel" role="tabpanel" style="display:none;"></div>
                             <div id="tool-summary" class="tool-panel" role="tabpanel" style="display:none;"></div>
                         </div>
                     </div>
                 </section>
+        <!-- Persistent Debug panel below all tab pages -->
+        <section class="card mt-32" id="debugPanel">
+                <div class="card-header">
+                    <h2 class="card-title">Debug</h2>
+                    <div class="row" style="gap:12px; align-items:center;">
+                        <button class="btn btn-secondary" id="debugClearBtn" type="button">Clear</button>
+                        <label class="toggle" for="debugAutoScroll">
+                            <input type="checkbox" id="debugAutoScroll" checked /> Auto-scroll
+                        </label>
+                    </div>
+                </div>
+                <div class="card-body">
+            <div id="debugLog" style="max-height:160px; overflow:auto; background:#0b0b0b; color:#ddd; padding:8px; border-radius:6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; line-height:1.4;"></div>
+                </div>
+            </section>
             </main>
         </div>
         <script src="index.ts" type="module"></script>
                 <script>
+            // Toggle Debug panel with Advanced > Debug checkbox
+            (function(){
+                function syncDebugPanel(){
+                    var cb = document.getElementById('debugLogging');
+                    var panel = document.getElementById('debugPanel');
+                    if (!panel) return;
+                    var show = true;
+                    try { show = !!(cb && cb.checked); } catch(e){}
+                    panel.style.display = show ? 'block' : 'none';
+                }
+                document.addEventListener('DOMContentLoaded', syncDebugPanel);
+                window.addEventListener('load', syncDebugPanel);
+                document.addEventListener('change', function(e){
+                    var t = e.target; if (!t || !t.matches) return;
+                    try { if (t.matches('#debugLogging')) syncDebugPanel(); } catch(_){}
+                });
+                // First sync in case scripts run after HTML parsed
+                syncDebugPanel();
+            })();
             // Safari 3.0+ "[object HTMLElementConstructor]"
             var isSafari = /constructor/i.test(window.HTMLElement) || (function (p) { return p.toString() === "[object SafariRemoteNotification]"; })(!window['safari'] || (typeof safari !== 'undefined' && window['safari'].pushNotification));
 
