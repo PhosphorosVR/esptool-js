@@ -19,6 +19,31 @@ const lblConsoleFor = document.getElementById("lblConsoleFor");
 const lblConnTo = document.getElementById("lblConnTo");
 const table = document.getElementById("fileTable") as HTMLTableElement;
 const alertDiv = document.getElementById("alertDiv");
+// Connection status UI bits (dot and alert in the Connect card)
+const connStatusDot = document.getElementById("connStatusDot") as HTMLElement | null;
+const connectAlert = document.getElementById("connectAlert") as HTMLElement | null;
+const connectAlertMsgEl = document.getElementById("connectAlertMsg") as HTMLElement | null;
+
+function updateConnStatusDot(up: boolean) {
+  if (!connStatusDot) return;
+  try {
+    connStatusDot.classList.toggle('status-green', !!up);
+    connStatusDot.classList.toggle('status-red', !up);
+    connStatusDot.title = up ? 'Connected' : 'Disconnected';
+    connStatusDot.setAttribute('aria-label', up ? 'Connected' : 'Disconnected');
+  } catch {}
+}
+
+function showConnectAlert(msg: string) {
+  try {
+    if (connectAlertMsgEl) connectAlertMsgEl.textContent = msg || '';
+    if (connectAlert) connectAlert.style.display = 'block';
+  } catch {}
+}
+
+function hideConnectAlert() {
+  try { if (connectAlert) connectAlert.style.display = 'none'; } catch {}
+}
 
 const debugLogging = document.getElementById("debugLogging") as HTMLInputElement;
 
@@ -230,6 +255,44 @@ import { serial } from "web-serial-polyfill";
 
 const serialLib = !navigator.serial && navigator.usb ? serial : navigator.serial;
 
+// Attach global serial disconnect handler and a polling fallback to detect port removal
+let serialEventsAttached = false;
+let portMonitorTimer: any = null;
+function attachSerialEventHandlers() {
+  const serAny = serialLib as any;
+  if (serialEventsAttached || !(serAny && serAny.addEventListener)) return;
+  try {
+    serAny.addEventListener('disconnect', (event: any) => {
+      const evPort = (event && (event.target || event.port || event.detail?.port)) || null;
+      if (device && (!evPort || evPort === device)) {
+        handlePortDisconnected('Device disconnected');
+      }
+    });
+  } catch {}
+  serialEventsAttached = true;
+}
+attachSerialEventHandlers();
+
+function startPortPresenceMonitor() {
+  if (portMonitorTimer) return;
+  portMonitorTimer = setInterval(async () => {
+    try {
+      const ports = await (serialLib as any)?.getPorts?.();
+      if (!device) return;
+      if (Array.isArray(ports) && ports.indexOf(device) === -1) {
+        await handlePortDisconnected('Device disconnected');
+      }
+    } catch {}
+  }, 2000);
+}
+
+function stopPortPresenceMonitor() {
+  if (portMonitorTimer) {
+    try { clearInterval(portMonitorTimer); } catch {}
+    portMonitorTimer = null;
+  }
+}
+
 declare let Terminal; // Terminal is imported in HTML script
 declare let CryptoJS; // CryptoJS is imported in HTML script
 
@@ -238,6 +301,13 @@ const term = new Terminal({ cols: 120, rows: 40, convertEol: true, scrollback: 5
 // @ts-ignore
 ;(window as any).term = term;
 term.open(terminal);
+// Helper to get xterm's scrollable viewport element
+function getTerminalViewport(): HTMLElement | null {
+  try {
+    const container = document.getElementById('terminal');
+    return (container?.querySelector('.xterm-viewport') as HTMLElement) || null;
+  } catch { return null; }
+}
 // Helper: adjust terminal rows to match small/fullscreen modes so bottom is visible
 function adjustTerminalSize() {
   try {
@@ -256,30 +326,35 @@ try {
   if (consoleSection) {
     const mo = new MutationObserver(() => {
       if ((consoleSection as HTMLElement).style.display !== 'none') {
-        setTimeout(() => { adjustTerminalSize(); try { term.scrollToBottom(); } catch {} }, 50);
+        setTimeout(() => {
+          adjustTerminalSize();
+          // Initialize autoScroll based on current position; scroll only if already at bottom
+          try { autoScroll = isAtBottom(); if (autoScroll) term.scrollToBottom(); } catch {}
+        }, 50);
       }
     });
     mo.observe(consoleSection, { attributes: true, attributeFilter: ['style'] });
   }
 } catch {}
 // Also react to window resizes
-try { window.addEventListener('resize', () => { adjustTerminalSize(); }); } catch {}
+try { window.addEventListener('resize', () => { adjustTerminalSize(); /* keep position; no forced scroll */ }); } catch {}
 // Track whether we're at the bottom to auto-scroll new output unless user scrolled up
 let autoScroll = true;
 function isAtBottom(): boolean {
-  try {
-    // @ts-ignore
-    const buf = (term as any).buffer?.active;
-    if (!buf) return true;
-    // At bottom when viewport is at baseY
-    return buf.viewportY === buf.baseY;
-  } catch { return true; }
+  const vp = getTerminalViewport();
+  if (!vp) return true;
+  // Consider at-bottom if the viewport is scrolled to the end (allow tiny rounding tolerance)
+  return (vp.scrollTop + vp.clientHeight) >= (vp.scrollHeight - 2);
 }
+// Update autoScroll on terminal/viewport scroll
 try {
+  // Prefer DOM viewport scroll; fall back to xterm event
+  const vp = getTerminalViewport();
+  if (vp) {
+    vp.addEventListener('scroll', () => { autoScroll = isAtBottom(); });
+  }
   // @ts-ignore
-  term.onScroll?.(() => {
-    autoScroll = isAtBottom();
-  });
+  term.onScroll?.(() => { autoScroll = isAtBottom(); });
 } catch {}
 // Allow Ctrl/Cmd+C to copy selected text instead of sending ^C
 try {
@@ -430,6 +505,9 @@ loadPrebuiltManifest();
 
 connectButton.onclick = async () => {
   try {
+  // Prepare UI: clear any alert and set dot to disconnected until success
+  hideConnectAlert();
+  updateConnStatusDot(false);
   // If console loop is running, stop it before (re)connecting
   isConsoleClosed = true;
     if (device === null) {
@@ -478,16 +556,23 @@ connectButton.onclick = async () => {
   isConnected = true;
   // @ts-ignore
   (window as any).isConnected = true;
+  // Update status indicator to connected
+  updateConnStatusDot(true);
+  hideConnectAlert();
   // Do not force-hide console panel; tabs manage visibility
   // Explicitly switch to Flashing tab after connect
   const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
   if (tabProgram) tabProgram.click();
+  // Begin monitoring port in case it disappears
+  startPortPresenceMonitor();
   } catch (e) {
     console.error(e);
     term.writeln(`Error: ${e.message}`);
   isConnected = false;
   // @ts-ignore
   (window as any).isConnected = false;
+  updateConnStatusDot(false);
+  showConnectAlert(`Connection failed: ${e?.message || e}`);
   }
 };
 
@@ -565,6 +650,7 @@ addFileButton.onclick = () => {
   }
 };
 
+  stopPortPresenceMonitor();
 /**
  * The built in HTMLTableRowElement object.
  * @external HTMLTableRowElement
@@ -590,8 +676,51 @@ function cleanUp() {
   deviceMac = null;
 }
 
+// Force UI back to Connect state if serial port is unplugged or vanishes
+async function handlePortDisconnected(msg?: string) {
+  if (!isConnected && !transport) return; // nothing to do
+  // Stop console loop and disconnect transport to release locks
+  try { isConsoleClosed = true; } catch {}
+  try { await transport?.disconnect?.(); } catch {}
+  try { await transport?.waitForUnlock?.(500); } catch {}
+  stopPortPresenceMonitor();
+  // Reset UI similar to manual Disconnect
+  try { term.reset(); } catch {}
+  try { lblBaudrate.style.display = "initial"; } catch {}
+  try { baudrates.style.display = "initial"; } catch {}
+  try { connectButton.style.display = "initial"; } catch {}
+  try { disconnectButton.style.display = "none"; } catch {}
+  try { traceButton.style.display = "none"; } catch {}
+  try { eraseButton.style.display = "none"; } catch {}
+  try { lblConnTo.style.display = "none"; } catch {}
+  try { filesDiv.style.display = "none"; } catch {}
+  try { alertDiv.style.display = "none"; } catch {}
+  // Update status indicator and show alert in Connect card
+  updateConnStatusDot(false);
+  showConnectAlert(msg || 'COM port disconnected.');
+  try { programDiv.style.display = "none"; } catch {}
+  try { consoleDiv.style.display = "none"; } catch {}
+  try {
+    const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
+    const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
+    const tabTools = document.querySelector('#tabs .tab[data-target="tools"]') as HTMLElement | null;
+    [tabProgram, tabConsole, tabTools].forEach((t) => {
+      if (t) { t.classList.add('disabled'); t.classList.remove('active'); }
+    });
+    const toolsSec = document.getElementById('tools') as HTMLElement | null;
+    if (toolsSec) toolsSec.style.display = 'none';
+  } catch {}
+  cleanUp();
+  isConnected = false;
+  // @ts-ignore
+  (window as any).isConnected = false;
+  // Optional: inform the user in the console if visible
+  try { if (msg) term.writeln(`\r\n[${msg}]`); } catch {}
+}
+
 disconnectButton.onclick = async () => {
   if (transport) await transport.disconnect();
+  stopPortPresenceMonitor();
 
   term.reset();
   lblBaudrate.style.display = "initial";
@@ -603,17 +732,23 @@ disconnectButton.onclick = async () => {
   lblConnTo.style.display = "none";
   filesDiv.style.display = "none";
   alertDiv.style.display = "none";
+  updateConnStatusDot(false);
+  showConnectAlert('COM port disconnected.');
   // In tabbed layout: hide both Program and Console sections and disable tabs
   programDiv.style.display = "none";
   consoleDiv.style.display = "none";
   const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
   const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
-  [tabProgram, tabConsole].forEach((t) => {
+  const tabTools = document.querySelector('#tabs .tab[data-target="tools"]') as HTMLElement | null;
+  [tabProgram, tabConsole, tabTools].forEach((t) => {
     if (t) {
       t.classList.add("disabled");
       t.classList.remove("active");
     }
   });
+  // Hide Tools section as well
+  const toolsSec = document.getElementById('tools') as HTMLElement | null;
+  if (toolsSec) toolsSec.style.display = 'none';
   cleanUp();
   isConnected = false;
   // @ts-ignore
@@ -654,7 +789,11 @@ consoleStartButton.onclick = async () => {
     consoleStopButton.style.display = 'initial';
     resetButton.style.display = 'initial';
   // Ensure we start scrolled to bottom in case prior content overflows
-  try { adjustTerminalSize(); term.scrollToBottom(); } catch {}
+  try {
+    adjustTerminalSize();
+    autoScroll = isAtBottom();
+    if (autoScroll) term.scrollToBottom();
+  } catch {}
 
   // Ensure transport is connected before starting read loop. Some browsers need an explicit connect after a prior disconnect.
     try {
@@ -699,15 +838,24 @@ consoleStartButton.onclick = async () => {
             const flushText = lines.join('\n') + '\n';
             // Scroll after render using write callback
             // @ts-ignore
-            term.write(flushText, () => { if (shouldAuto) { try { term.scrollToBottom(); } catch {} } });
+            term.write(flushText, () => {
+              if (shouldAuto) {
+                try { term.scrollToBottom(); } catch {}
+              }
+            });
           }
         } else {
           // Fallback for non-text chunks
           try {
             // @ts-ignore
-            term.write(String(value), () => { if (autoScroll) { try { term.scrollToBottom(); } catch {} } });
+            term.write(String(value), () => {
+              if (autoScroll) {
+                try { term.scrollToBottom(); } catch {}
+              }
+            });
           } catch {
-            try { term.scrollToBottom(); } catch {}
+            // Don't force-scroll if user scrolled up
+            if (autoScroll) { try { term.scrollToBottom(); } catch {} }
           }
         }
       } catch (loopErr) {

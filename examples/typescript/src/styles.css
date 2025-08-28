@@ -110,6 +110,18 @@ body {
 .card-title { margin: 0; font-size: 16px; }
 .card-body { padding: 16px; }
 
+/* Connection status dot */
+.status-dot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  margin-left: 8px;
+  vertical-align: middle;
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.15) inset;
+}
+.status-red { background: #d34b4b; box-shadow: 0 0 6px 0 #d34b4b88; }
+.status-green { background: #2fd180; box-shadow: 0 0 6px 0 #2fd18088; }
+
 /* Controls */
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .field { display: flex; align-items: center; gap: 8px; }

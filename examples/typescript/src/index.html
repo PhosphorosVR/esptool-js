@@ -21,12 +21,16 @@
             <main id="main">
                 <section class="card" id="connect">
                     <div class="card-header">
-                        <h2 class="card-title">Connect</h2>
+                        <h2 class="card-title">Connect <span id="connStatusDot" class="status-dot status-red" title="Disconnected" aria-label="Disconnected"></span></h2>
                         <div class="row">
                             <label style="display:none" id="lblConnTo">Connected to device:</label>
                         </div>
                     </div>
                     <div class="card-body">
+                        <div class="alert mt-12" id="connectAlert" style="display:none;">
+                            <span class="close" onclick="this.parentElement.style.display='none'">&times;</span>
+                            <span id="connectAlertMsg"></span>
+                        </div>
                         <div class="row connect-actions">
                             <input class="btn btn-primary" type="button" id="connectButton" value="Connect" />
                             <input class="btn btn-warning" type="button" id="disconnectButton" value="Disconnect" />
@@ -164,7 +168,7 @@
                                         <tr>
                                             <th class="col-select">Select</th>
                                             <th>Network</th>
-                                            <th>Strength</th>
+                                            <th>signal Strength</th>
                                         </tr>
                                     </thead>
                                     <tbody id="wifiTableBody"></tbody>
@@ -254,7 +258,7 @@
                                                         tab.addEventListener('click', function(){
                                                             if (tab.classList.contains('disabled')) return;
                                                             // Block Tools tab when not connected, align with other tabs
-                                                            if (tab.dataset.target === 'tools' && !window.isConnected) return;
+                                                            if (!window.isConnected && tab.dataset.target === 'tools') return;
                                                             var leavingConsole = document.querySelector('#tabs .tab.active[data-target="console"]');
                                                             if (leavingConsole && tab.dataset.target !== 'console' && window.softStopConsole) {
                                                                 try { window.softStopConsole(); } catch(e){}
