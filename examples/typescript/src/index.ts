@@ -1,3 +1,16 @@
+async function getMacOnly(): Promise<string | null> {
+  try {
+    await ensurePaused();
+    const resp = await sendJsonCommand('get_serial', {}, 8000);
+    const arr = resp?.results || [];
+    if (!arr.length) return null;
+    let inner: any = arr[0];
+    try { if (typeof inner === 'string') inner = JSON.parse(inner); } catch {}
+    let payload: any = (inner && typeof inner === 'object' && 'result' in inner) ? inner.result : inner;
+    if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
+    return payload?.mac ?? null;
+  } catch { return null; }
+}
 const baudrates = document.getElementById("baudrates") as HTMLSelectElement;
 const connectButton = document.getElementById("connectButton") as HTMLButtonElement;
 const traceButton = document.getElementById("copyTraceButton") as HTMLButtonElement;
@@ -1162,9 +1175,7 @@ async function refreshMode() {
 }
 
 function wireModePanel() {
-  const btnRefresh = document.getElementById('modeRefreshButton') as HTMLButtonElement | null;
   const btnApply = document.getElementById('modeApplyButton') as HTMLButtonElement | null;
-  if (btnRefresh) btnRefresh.onclick = () => { refreshMode(); };
   if (btnApply) btnApply.onclick = async () => {
     const msgEl = document.getElementById('modeMsg');
     const selected = document.querySelector<HTMLInputElement>('input[name="devMode"]:checked');
@@ -1199,9 +1210,183 @@ try {
         // @ts-ignore
         if ((window as any).isConnected) refreshMode();
       }
+      if (li && li.dataset.target === 'tool-pwm') {
+        // @ts-ignore
+        if ((window as any).isConnected) refreshPwm();
+      }
+      if (li && li.dataset.target === 'tool-summary') {
+        // @ts-ignore
+        if ((window as any).isConnected) refreshSummary();
+      }
     });
   }
 } catch {}
+
+// ---- PWM Duty (LED external PWM) ----
+let pwmCurrent: number | null = null;           // last known value from device
+let pwmLastApplied: number | null = null;       // last value we successfully set
+let pwmPendingTimer: any = null;                // debounce timer for stable value
+let pwmSending = false;                         // in-flight
+let pwmLastThresholdTs = 0;                     // last immediate threshold send time
+
+async function getLedDuty(): Promise<number | null> {
+  try {
+    await ensurePaused();
+    const resp = await sendJsonCommand('get_led_duty_cycle', {}, 10000);
+    const arr = resp?.results || [];
+    if (!arr.length) return null;
+    let inner: any = arr[0];
+    try { if (typeof inner === 'string') inner = JSON.parse(inner); } catch {}
+    let payload: any = (inner && typeof inner === 'object' && 'result' in inner) ? inner.result : inner;
+    if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
+    const v = payload?.led_external_pwm_duty_cycle;
+    return (typeof v === 'number') ? v : (typeof v === 'string' ? parseInt(v, 10) : null);
+  } catch { return null; }
+}
+
+async function setLedDuty(duty: number): Promise<boolean> {
+  try {
+    const resp = await sendJsonCommand('set_led_duty_cycle', { dutyCycle: duty }, 8000);
+    return !resp?.error;
+  } catch { return false; }
+}
+
+function updatePwmUI(value: number | null) {
+  const statusEl = document.getElementById('pwmStatus');
+  const slider = document.getElementById('pwmSlider') as HTMLInputElement | null;
+  const num = document.getElementById('pwmNumber') as HTMLInputElement | null;
+  if (statusEl) statusEl.textContent = (value == null || Number.isNaN(value)) ? '-' : `${value}%`;
+  if (typeof value === 'number' && slider) slider.value = String(Math.max(0, Math.min(100, Math.round(value))));
+  if (typeof value === 'number' && num) num.value = String(Math.max(0, Math.min(100, Math.round(value))));
+  // Track device-known values
+  pwmCurrent = (typeof value === 'number') ? Math.max(0, Math.min(100, Math.round(value))) : pwmCurrent;
+  pwmLastApplied = pwmCurrent;
+}
+
+async function refreshPwm() {
+  const msgEl = document.getElementById('pwmMsg');
+  try {
+    if (!transport) await ensureTransportConnected();
+    const v = await getLedDuty();
+    updatePwmUI(v);
+  if (msgEl) msgEl.textContent = (v == null) ? 'Unable to read duty' : '';
+  } catch (e:any) {
+    if (msgEl) msgEl.textContent = `Error: ${e?.message || e}`;
+  }
+}
+
+function wirePwmPanel() {
+  const slider = document.getElementById('pwmSlider') as HTMLInputElement | null;
+  const num = document.getElementById('pwmNumber') as HTMLInputElement | null;
+  if (slider && num) {
+    const sync = (from: 'slider'|'num') => {
+      const val = from === 'slider' ? parseInt(slider.value, 10) : parseInt(num.value, 10);
+      const clamped = Math.max(0, Math.min(100, isNaN(val) ? 0 : val));
+      slider.value = String(clamped);
+      num.value = String(clamped);
+      handlePwmInputChange(clamped);
+    };
+    slider.addEventListener('input', () => sync('slider'));
+    num.addEventListener('input', () => sync('num'));
+  }
+}
+
+try { wirePwmPanel(); } catch {}
+
+// ---- Summary (aggregated GET) ----
+// Identity: show MAC only
+
+async function getWifiStatus(): Promise<{status?: string; ip?: string; configured?: number} | null> {
+  try {
+    await ensurePaused();
+    const resp = await sendJsonCommand('get_wifi_status', {}, 8000);
+    const arr = resp?.results || [];
+    if (!arr.length) return null;
+    let inner: any = arr[0];
+    try { if (typeof inner === 'string') inner = JSON.parse(inner); } catch {}
+    let payload: any = (inner && typeof inner === 'object' && 'result' in inner) ? inner.result : inner;
+    if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
+    return {
+      status: payload?.status,
+      ip: payload?.ip_address,
+      configured: payload?.networks_configured
+    };
+  } catch { return null; }
+}
+
+async function refreshSummary() {
+  const msgEl = document.getElementById('sumMsg');
+  const elMac = document.getElementById('sumMac');
+  const elLed = document.getElementById('sumLed');
+  const elMode = document.getElementById('sumMode');
+  const elWifiStatus = document.getElementById('sumWifiStatus');
+  const elWifiIp = document.getElementById('sumWifiIp');
+  const elWifiCfg = document.getElementById('sumWifiConfigured');
+  try {
+    if (!transport) await ensureTransportConnected();
+    // Fetch sequentially; each call is fast and keeps code simple
+  const mac = await getMacOnly();
+  const led = await getLedDuty();
+    const mode = await getDeviceMode();
+    const wifi = await getWifiStatus();
+  if (elMac) elMac.textContent = mac || '-';
+  if (elLed) elLed.textContent = (typeof led === 'number') ? `${led}%` : '-';
+    if (elMode) elMode.textContent = mode || '-';
+    if (elWifiStatus) elWifiStatus.textContent = wifi?.status || '-';
+    if (elWifiIp) elWifiIp.textContent = wifi?.ip || '-';
+    if (elWifiCfg) elWifiCfg.textContent = (wifi?.configured != null) ? String(wifi.configured) : '-';
+    if (msgEl) msgEl.textContent = '';
+  } catch (e:any) {
+    if (msgEl) msgEl.textContent = `Error: ${e?.message || e}`;
+  }
+}
+
+function handlePwmInputChange(value: number) {
+  // Debounce: if user leaves the value unchanged for 1s, apply it
+  if (pwmPendingTimer) { try { clearTimeout(pwmPendingTimer); } catch {} }
+  pwmPendingTimer = setTimeout(() => {
+    sendPwm(value, 'debounced');
+  }, 1000);
+
+  // Threshold-triggered live feel: send immediately if >=5 difference from last applied/current
+  const baseline = (pwmLastApplied != null ? pwmLastApplied : (pwmCurrent != null ? pwmCurrent : value));
+  if (Math.abs(value - baseline) >= 5) {
+    const now = Date.now();
+    // Rate limit immediate sends to avoid flooding while dragging
+    if (now - pwmLastThresholdTs >= 400 && !pwmSending) {
+      pwmLastThresholdTs = now;
+      sendPwm(value, 'threshold');
+    }
+  }
+}
+
+async function sendPwm(value: number, reason: 'debounced'|'threshold') {
+  const msgEl = document.getElementById('pwmMsg');
+  const v = Math.max(0, Math.min(100, Math.round(value)));
+  if (pwmSending) return; // Another send in flight; debounce will catch the latest
+  pwmSending = true;
+  try {
+    if (!transport) await ensureTransportConnected();
+    const ok = await setLedDuty(v);
+    if (ok) {
+      // Optional short confirmation only for debounced (final) sends to minimize noise
+      if (reason === 'debounced' && msgEl) {
+        msgEl.textContent = 'Brightness updated';
+        try { setTimeout(() => { if (msgEl.textContent === 'Brightness updated') msgEl.textContent = ''; }, 5000); } catch {}
+      }
+      pwmLastApplied = v;
+      // Read back current value (cheap GET); keeps UI in sync
+      const read = await getLedDuty();
+      updatePwmUI(read != null ? read : v);
+    } else {
+  if (msgEl) msgEl.textContent = 'Failed to update brightness';
+    }
+  } catch (e:any) {
+    if (msgEl) msgEl.textContent = `Error: ${e?.message || e}`;
+  } finally {
+    pwmSending = false;
+  }
+}
 
 /**
  * Validate the provided files images and offset to see if they're valid.

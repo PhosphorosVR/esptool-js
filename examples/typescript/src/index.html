@@ -141,7 +141,7 @@
                             <li class="subtab" role="tab" aria-selected="false" data-target="tool-uvc">💻 UVC Name</li>
                             <li class="subtab" role="tab" aria-selected="false" data-target="tool-stream">🚀 Streaming</li>
                             <li class="subtab" role="tab" aria-selected="false" data-target="tool-mode">🔄 Device Mode</li>
-                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-pwm">💡 PWM Duty</li>
+                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-pwm">💡 LEDs</li>
                             <li class="subtab" role="tab" aria-selected="false" data-target="tool-logs">📖 Logs</li>
                             <li class="subtab" role="tab" aria-selected="false" data-target="tool-summary">🧩 Summary</li>
                         </ul>
@@ -180,21 +180,59 @@
                                 <div class="row">
                                     <span class="muted">Current mode:</span>
                                     <strong id="modeStatus" style="margin-left:8px;">-</strong>
-                                    <button class="btn btn-secondary" id="modeRefreshButton" type="button" style="margin-left:12px;">Refresh</button>
                                 </div>
-                                <div class="row mt-8" id="modeChoices">
+                                <div class="row mt-16" id="modeChoices">
                                     <label class="radio" style="margin-right:16px;"><input type="radio" name="devMode" value="wifi"> WiFi</label>
                                     <label class="radio" style="margin-right:16px;"><input type="radio" name="devMode" value="uvc"> UVC</label>
                                     <label class="radio"><input type="radio" name="devMode" value="auto"> Auto</label>
                                 </div>
-                                <div class="row mt-8">
+                                <div class="row mt-16">
                                     <button class="btn btn-primary" id="modeApplyButton" type="button">Apply</button>
                                     <span id="modeMsg" class="muted" style="margin-left:12px;"></span>
                                 </div>
                             </div>
-                            <div id="tool-pwm" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-pwm" class="tool-panel" role="tabpanel" style="display:none;">
+                                <div class="row">
+                                    <span class="muted">Current LED brightness:</span>
+                                    <strong id="pwmStatus" style="margin-left:8px;">-</strong>
+                                </div>
+                                <div class="row mt-16" id="pwmControls">
+                                    <label class="field" style="gap:10px;">
+                                        <span>LED brightness:</span>
+                                        <input type="range" id="pwmSlider" min="0" max="100" value="0" style="width:200px;">
+                                        <input type="number" id="pwmNumber" min="0" max="100" value="0" style="width:72px;">
+                                    </label>
+                                </div>
+                                <div class="row mt-8">
+                                    <span id="pwmMsg" class="muted"></span>
+                                </div>
+                            </div>
                             <div id="tool-logs" class="tool-panel" role="tabpanel" style="display:none;"></div>
-                            <div id="tool-summary" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-summary" class="tool-panel" role="tabpanel" style="display:none;">
+                                <div class="row">
+                                    <span class="muted">MAC:</span>
+                                    <strong id="sumMac" style="margin-left:8px;">-</strong>
+                                </div>
+                                <div class="row mt-12">
+                                    <span class="muted">LED brightness:</span>
+                                    <strong id="sumLed" style="margin-left:8px;">-</strong>
+                                </div>
+                                <div class="row mt-12">
+                                    <span class="muted">Mode:</span>
+                                    <strong id="sumMode" style="margin-left:8px;">-</strong>
+                                </div>
+                                <div class="row mt-12">
+                                    <span class="muted">WiFi:</span>
+                                    <strong id="sumWifiStatus" style="margin-left:8px;">-</strong>
+                                    <span class="muted" style="margin-left:12px;">IP:</span>
+                                    <strong id="sumWifiIp" style="margin-left:8px;">-</strong>
+                                    <span class="muted" style="margin-left:12px;">Configured:</span>
+                                    <strong id="sumWifiConfigured" style="margin-left:8px;">-</strong>
+                                </div>
+                                <div class="row mt-12">
+                                    <span id="sumMsg" class="muted"></span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </section>
