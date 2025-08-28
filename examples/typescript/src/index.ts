@@ -463,7 +463,9 @@ const espLoaderTerminal = {
   },
 };
 
-// Load prebuilt firmware manifest (prefer bundler URL, fallback to relative URL)
+// Load prebuilt firmware list dynamically from ./binaries at runtime
+// 1) Try ./binaries/manifest.json (simple JSON you can edit in dist without rebuild)
+// 2) If not found, try to parse directory listing HTML of ./binaries/ for *.bin files
 let prebuiltItems: Array<{ name?: string; file: string; address?: string }> = [];
 async function fetchJson(url: string) {
   try {
@@ -474,15 +476,55 @@ async function fetchJson(url: string) {
     return null;
   }
 }
+async function fetchText(url: string) {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const ct = res.headers.get('content-type') || '';
+    // Only accept HTML/text for listing fallbacks
+    if (!/text\/(html|plain)|application\/xhtml\+xml/i.test(ct) && ct) return null;
+    return await res.text();
+  } catch (_) {
+    return null;
+  }
+}
+function parseAddrFromName(filename: string): string | undefined {
+  // Support filenames like "0x10000_firmware.bin" or "0x10000-firmware.bin"
+  const m = filename.match(/^0x([0-9a-fA-F]+)[_-]/);
+  return m ? `0x${m[1]}` : undefined;
+}
 async function loadPrebuiltManifest() {
   try {
-    const manifestUrl = new URL("./binaries/manifest.json", import.meta.url).toString();
-    let json = await fetchJson(manifestUrl);
-    if (!json) {
-      // Fallback: relative to page
-      json = await fetchJson("./binaries/manifest.json");
+    // 1) Preferred: plain file next to the built app
+    const json = await fetchJson("./binaries/manifest.json");
+    if (Array.isArray(json?.items)) {
+      prebuiltItems = json.items;
+    } else {
+      // 2) Fallback: try directory listing (works on some static servers)
+      const html = await fetchText("./binaries/");
+      if (html) {
+        const binSet = new Set<string>();
+        const re = /href=\"([^\"]+\.bin)\"/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(html))) {
+          let href = m[1];
+          // Normalize to relative within ./binaries
+          if (href.startsWith("http") || href.startsWith("//")) continue; // skip absolute
+          if (href.startsWith("/")) continue; // skip root-absolute
+          href = href.replace(/^\.\//, "");
+          // Only take direct children (no subfolders) for safety
+          if (href.includes("/")) continue;
+          binSet.add(href);
+        }
+        prebuiltItems = Array.from(binSet).sort().map((file) => ({
+          file,
+          name: file,
+          address: parseAddrFromName(file),
+        }));
+      } else {
+        prebuiltItems = [];
+      }
     }
-    prebuiltItems = Array.isArray(json?.items) ? json.items : [];
     if (prebuiltSelect) {
       // Clear existing options except placeholder
       for (let i = prebuiltSelect.options.length - 1; i >= 1; i--) {
@@ -491,14 +533,14 @@ async function loadPrebuiltManifest() {
       prebuiltItems.forEach((it, idx) => {
         const opt = document.createElement("option");
         opt.value = String(idx);
-  const label = it.name || it.file;
-  opt.textContent = label;
-  opt.title = label; // show full name on hover
+        const label = it.name || it.file;
+        opt.textContent = label;
+        opt.title = label; // show full name on hover
         prebuiltSelect.appendChild(opt);
       });
     }
   } catch (e) {
-    console.warn("No prebuilt manifest or failed to load.", e);
+    console.warn("No prebuilt list or failed to load.", e);
   }
 }
 loadPrebuiltManifest();
@@ -987,22 +1029,14 @@ programButton.onclick = async () => {
   fileArray.push({ data: fileData, address: offset });
   }
 
-  // If a prebuilt is selected, fetch and add it
+  // If a prebuilt is selected, fetch and add it (from ./binaries at runtime)
   if (prebuiltSelect && prebuiltSelect.value) {
     try {
       const idx = parseInt(prebuiltSelect.value, 10);
       const item = prebuiltItems[idx];
       if (item && item.file) {
-        let res: Response | null = null;
-        try {
-          const binUrl = new URL(`./binaries/${item.file}`, import.meta.url).toString();
-          res = await fetch(binUrl, { cache: "no-store" });
-          if (!res.ok) res = null;
-        } catch (_) {}
-        if (!res) {
-          // Fallback: relative to page
-          res = await fetch(`./binaries/${item.file}`, { cache: "no-store" });
-        }
+        const res = await fetch(`./binaries/${item.file}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.blob();
         const arrayBuf = await blob.arrayBuffer();
         const bytes = new Uint8Array(arrayBuf);
