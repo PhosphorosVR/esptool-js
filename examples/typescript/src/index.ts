@@ -112,11 +112,12 @@ async function sendJsonCommand(command: string, params?: any, timeoutMs = 10000)
 
   const dec = new TextDecoder();
   let buffer = "";
-  // For scan_networks, remember if we saw a networks array (even if empty)
-  let lastNetworksSeen: any[] | null = null;
+  // For scan_networks, track if we saw a networks JSON block already and completion timing
+  let sawNetworksJson = false;
+  let scanCompletionAt: number | null = null;
   const start = Date.now();
-  const loop = transport.rawRead();
   while (Date.now() - start < timeoutMs) {
+    const loop = transport.rawRead();
     const { value, done } = await loop.next();
     if (done) break;
     if (!value) continue;
@@ -127,25 +128,15 @@ async function sendJsonCommand(command: string, params?: any, timeoutMs = 10000)
 
     // Special handling: scan_networks may emit a raw multi-line JSON {"networks":[...]}
     if (command === 'scan_networks') {
-  const m = buffer.match(/\{\s*"networks"\s*:\s*\[([\s\S]*?)\]\s*\}/);
+      // Robust regex to locate networks JSON regardless of whitespace/layout
+      const re = /\{\s*"networks"\s*:\s*\[[\s\S]*?\]\s*\}/m;
+      const m = buffer.match(re);
       if (m && m[0]) {
-        try {
-          const parsed = JSON.parse(m[0]);
-          const arr = Array.isArray(parsed?.networks) ? parsed.networks : [];
-          if (arr.length > 0) {
-            // Fast-path return when we have non-empty results
-    const out = { networks: arr };
-    try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
-    return out;
-          }
-          // Remember that we saw an empty list so we can return it on timeout
-          lastNetworksSeen = [];
-        } catch {
-          // Fallback to previous compatible format
-      const out = { results: [ JSON.stringify({ result: m[0] }) ] };
-      try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
-      return out;
-        }
+        const jsonStr = m[0];
+        try { JSON.parse(jsonStr); sawNetworksJson = true; } catch {}
+        const out = { results: [ JSON.stringify({ result: jsonStr }) ] } as any;
+        try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
+        return out;
       }
     }
   // Find complete JSON objects in the buffer using brace counting, return only responses with results/error
@@ -193,22 +184,24 @@ async function sendJsonCommand(command: string, params?: any, timeoutMs = 10000)
             };
             const nets = findNetworks(obj);
             // Return only when we actually have at least one network; otherwise keep reading
-      if (nets) {
+            if (nets) {
               if (nets.length > 0) {
         const out = { networks: nets };
         try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
         return out;
               }
-              // Track empty discovery; if nothing else arrives we'll return empty at timeout
-              lastNetworksSeen = [];
             }
           }
 
           if (obj && (Object.prototype.hasOwnProperty.call(obj, 'results') || Object.prototype.hasOwnProperty.call(obj, 'error'))) {
             // For scan_networks, do not return early on generic results like "Networks scanned";
-            // only return when we have a networks array (handled above), otherwise keep reading.
+            // only return when we have a networks array (handled above). If we see completion,
+            // start a short grace window to allow networks JSON to arrive, then return empty.
             if (command === 'scan_networks') {
               try { appendDebugLine('rx', JSON.stringify(obj)); } catch {}
+              // If we saw a completion message, mark the time and keep waiting briefly for networks JSON
+              // Ignore the generic completion message; continue waiting for networks JSON until timeout
+              try { /* no-op: do not early-return empty */ } catch {}
               // continue accumulating for networks payload
             } else if (command === 'switch_mode') {
               // Acknowledge typically comes as human text; return immediately when present
@@ -241,9 +234,9 @@ async function sendJsonCommand(command: string, params?: any, timeoutMs = 10000)
       }
     }
   }
-  // If we were scanning networks and observed an empty list, return it instead of timing out
-  if (command === 'scan_networks' && lastNetworksSeen) {
-    const out = { networks: lastNetworksSeen };
+  // If scan completed but networks JSON never arrived within the grace window, return empty
+  if (command === 'scan_networks' && scanCompletionAt && !sawNetworksJson) {
+    const out = { results: [ JSON.stringify({ result: '{"networks":[]}' }) ] } as any;
     try { appendDebugLine('rx', JSON.stringify(out)); } catch {}
     return out;
   }
@@ -285,8 +278,9 @@ async function wifiScanAndDisplay() {
   const statusEl = document.getElementById('wifiStatusMsg') as HTMLElement | null;
   try {
     statusEl && (statusEl.textContent = 'Scanning...');
+  // Scan while paused, same as pytool.py
   await ensurePaused();
-    const scanResp = await sendJsonCommand('scan_networks', undefined, 30000);
+  const scanResp = await sendJsonCommand('scan_networks', undefined, 30000);
     const nets = parseNetworksFromResults(scanResp);
     nets.sort((a, b) => (b.rssi || -999) - (a.rssi || -999));
   const tableEl = document.getElementById('wifiTable') as HTMLElement | null;
@@ -526,6 +520,8 @@ async function ensurePaused(): Promise<boolean> {
     return false;
   }
 }
+
+// (runWithDeviceActive removed; we run scan in paused mode like pytool.py)
 
 // Helper: try to pause the app with a few retries to cover post-connect settle time
 async function pauseWithRetries(initialDelayMs = 600, attempts = 3, retryDelayMs = 500): Promise<boolean> {

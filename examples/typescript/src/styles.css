@@ -383,7 +383,8 @@ details.advanced > summary:hover { opacity: 1; }
   list-style: none;
   padding: 0;
   margin: 0;
-  border-bottom: 1px solid var(--border);
+  /* Remove underline below tabs for seamless look */
+  border-bottom: none;
 }
 .tab {
   padding: 10px 14px;
@@ -403,6 +404,18 @@ details.advanced > summary:hover { opacity: 1; }
 .tab.disabled {
   opacity: .5;
   pointer-events: none;
+}
+
+/* Remove the top border on tab content cards so tabs merge into content */
+#program.card,
+#console.card,
+#tools.card {
+  border-top: none;
+}
+
+/* Remove rounded corner where the Flashing tab meets its panel */
+#program.card {
+  border-top-left-radius: 0;
 }
 
 /* Utility overrides: allow mt-* to affect tabs despite .tabs { margin: 0 } */
