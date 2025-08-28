@@ -2,104 +2,290 @@
 <html>
     <head>
         <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
         <title>ESP Tool</title>
-        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@4.19.0/css/xterm.css">
-        <link
-            href="https://fonts.googleapis.com/css?family=Orbitron"
-            rel="stylesheet"
-        />
-        <link rel="icon" href="../assets/favicon.ico" />
-         <script src="https://cdn.jsdelivr.net/npm/xterm@4.19.0/lib/xterm.min.js"></script>
-         <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.1.1/crypto-js.js"></script>
-         <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
-         <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Orbitron:wght@600&display=swap" rel="stylesheet"/>
+    <!-- Favicon removed per request -->
+        <link rel="stylesheet" href="./styles.css" />
+        <script src="https://cdn.jsdelivr.net/npm/xterm@4.19.0/lib/xterm.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.1.1/crypto-js.js"></script>
     </head>
     <body>
-        <h1 align="center"><p><img src="../assets/esp-logo.png" width="42" height="42" style="vertical-align:middle" crossorigin></img> ESP Tool</p></h1>
-        <h4 align="center">A Serial Flasher utility for Espressif chips</h4>
-        <div id="safariErr" style="display:none"><p align="center" style="color:red">This tool is not supported on Safari browser!</p>
-        </div>
-        <div align="center">
-            <a class="btn btn-info" href="./docs/index.html">View the API Documentation</a>
+    <div class="container">
 
-            <div class="form-check form-check-inline">
-                <input class="form-check-input" type="checkbox" id="debugLogging" value="">
-                <label class="form-check-label" for="debugLogging">Show Debug log</label>
+            <div id="safariErr" style="display:none" class="alert mt-12">
+                <span id="alertmsg">This tool is not supported on Safari browser!</span>
             </div>
-          </div>
-        <div class="container" id="main">
-            <hr/>
-            <div id="program">
-                <h3> Program </h3>
-                <label for="baudrates" id="lblBaudrate">Baudrate:</label>
-                <label style="display:none" id="lblConnTo">Connected to device: </label>
-                <select name="baudrates" id="baudrates">
-                    <option value="921600">921600</option>
-                    <option value="460800">460800</option>
-                    <option value="230400">230400</option>
-                    <option value="115200">115200</option>
-                </select>
 
-                <br><br>
+            <main id="main">
+                <section class="card" id="connect">
+                    <div class="card-header">
+                        <h2 class="card-title">Connect</h2>
+                        <div class="row">
+                            <label style="display:none" id="lblConnTo">Connected to device:</label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row connect-actions">
+                            <input class="btn btn-primary" type="button" id="connectButton" value="Connect" />
+                            <input class="btn btn-warning" type="button" id="disconnectButton" value="Disconnect" />
+                        </div>
+                        <details class="advanced mt-8">
+                            <summary>Advanced</summary>
+                            <div class="advanced-body">
+                                <div class="row">
+                                    <label class="field" for="baudrates" id="lblBaudrate">Baudrate:
+                                        <select name="baudrates" id="baudrates">
+                                            <option value="921600">921600</option>
+                                            <option value="460800">460800</option>
+                                            <option value="230400">230400</option>
+                                            <option value="115200">115200</option>
+                                        </select>
+                                    </label>
+                                    <label class="toggle" for="debugLogging">
+                                        <input type="checkbox" id="debugLogging" />
+                                        Show Debug log
+                                    </label>
+                                </div>
+                                <div class="row mt-8">
+                                    <input class="btn btn-secondary" type="button" id="copyTraceButton" value="Copy Trace" />
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </section>
+            <ul class="tabs mt-32" id="tabs">
+                <li class="tab disabled" data-target="program">Flashing</li>
+                <li class="tab disabled" data-target="console">Console</li>
+                <li class="tab disabled" data-target="tools">Tools</li>
+            </ul>
+    <section class="card" id="program" style="display:none;">
+                    <div class="card-header">
+            <h2 class="card-title">Flashing</h2>
+            <div class="row"></div>
+                    </div>
+                    <div class="card-body">
 
-                <input class="btn btn-info btn-sm" type="button" id="connectButton" value="Connect" />
-                <input class="btn btn-info btn-sm" type="button" id="copyTraceButton" value="Copy Trace" />
-                <input class="btn btn-warning btn-sm" type="button" id="disconnectButton" value="Disconnect" />
-                <input class="btn btn-danger btn-sm" type="button" id="eraseButton" value="Erase Flash" />
-                <br>
+                        <div class="alert mt-12 mb-12" id="alertDiv" style="display:none;">
+                            <span class="close" onclick="this.parentElement.style.display='none'">&times;</span>
+                            <span id="programAlertMsg"></span>
+                        </div>
+                        <div id="files">
+                            <div id="prebuiltRow" class="row mt-12">
+                                <label class="field" for="prebuiltSelect">Firmware:
+                                    <select id="prebuiltSelect">
+                                        <option value="">Select firmware…</option>
+                                    </select>
+                                </label>
+                            </div>
 
-                <div class="alert alert-danger alert-dismissible" id="alertDiv" style="display:none; margin-top:10px">
-                    <a href="#" class="close" aria-label="close" onclick="$('.alert').hide()">&times;</a>
-                    <span id="alertmsg"></span>
-                </div>
+                            <details class="advanced mt-12">
+                                <summary>Advanced</summary>
+                                <div class="advanced-body">
+                                    <div class="row mt-8">
+                                        <input class="btn btn-danger" type="button" id="eraseButton" value="Erase Flash" />
+                                    </div>
+                                    <table id="fileTable">
+                                        <thead>
+                                            <tr>
+                                                <th>Flash Address</th>
+                                                <th>File</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tableBody"></tbody>
+                                    </table>
+                                    <div class="row mt-8">
+                                        <input class="btn btn-secondary" type="button" id="addFile" value="Add File" />
+                                    </div>
+                                </div>
+                            </details>
 
-                <div id="files">
-                    <table class="table table-striped" id="fileTable">
-                        <thead class="thead-light">
-                            <tr>
-                                <th>Flash Address</th>
-                                <th>File</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="tableBody">
-                        </tbody>
-                    </table>
-                    <input class="btn btn-info btn-sm" type="button" id="addFile" value="Add File" />
-                    <input class="btn btn-info btn-sm" type="button" id="programButton" value="Program" />
-                </div>
-                <output id="list"></output>
-                <hr/>
-            </div>
-            <div id="console">
-                <h3>Console </h3>
-                <label style="display:none" id="lblConsoleFor">Connected to device: </label>
-                <label for="consoleBaudrates" id="lblConsoleBaudrate">Baudrate:</label>
-                <select name="consoleBaudrates" id="consoleBaudrates">
-                    <option value="115200">115200</option>
-                    <option value="74880">74880</option>
-                </select>
+                            <div class="row mt-12">
+                                <input class="btn btn-primary" type="button" id="programButton" value="Flash" />
+                            </div>
+                        </div>
+                        <output id="list"></output>
+                    </div>
+                </section>
 
-                <br><br>
-
-                <input class="btn btn-info" type="button" id="consoleStartButton" value="Start" />
-                <input class="btn btn-info" type="button" id="consoleStopButton" value="Stop" />
-                <input class="btn btn-info" type="button" id="resetButton" value="Reset" />
-                <hr/>
-            </div>
-            <div id="terminal"></div>
+                                <section class="card" id="console" style="display:none;">
+                    <div class="card-header">
+                        <h2 class="card-title">Console</h2>
+                        <div class="row">
+                            <label style="display:none" id="lblConsoleFor">Connected to device: </label>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <input class="btn btn-primary" type="button" id="consoleStartButton" value="Start" />
+                            <input class="btn btn-secondary" type="button" id="consoleStopButton" value="Stop" />
+                            <input class="btn btn-secondary" type="button" id="resetButton" value="Reset" />
+                            <span class="spacer"></span>
+                            <button class="btn btn-secondary" id="terminalExpandBtn" type="button" title="Expand console">⤢ Expand</button>
+                        </div>
+                        <div class="mt-12 terminal-wrapper" id="terminalWrapper">
+                            <div class="terminal-bar" id="terminalBar">
+                                <div class="title">Console</div>
+                                <div class="actions">
+                                    <button class="btn btn-secondary" id="terminalCloseBtn" type="button" title="Close">✕ Close</button>
+                                </div>
+                            </div>
+                            <div id="terminal"></div>
+                        </div>
+                    </div>
+                </section>
+                <section class="card" id="tools" style="display:none;">
+                    <div class="card-header">
+                        <h2 class="card-title">Tools</h2>
+                    </div>
+                    <div class="card-body">
+                        <ul class="subtabs" id="toolTabs" role="tablist" aria-label="Setup tools">
+                            <li class="subtab active" role="tab" aria-selected="true" data-target="tool-wifi">📶 WiFi</li>
+                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-mdns">🌐 mDNS</li>
+                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-uvc">💻 UVC Name</li>
+                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-stream">🚀 Streaming</li>
+                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-mode">🔄 Device Mode</li>
+                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-pwm">💡 PWM Duty</li>
+                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-logs">📖 Logs</li>
+                            <li class="subtab" role="tab" aria-selected="false" data-target="tool-summary">🧩 Summary</li>
+                        </ul>
+                        <div class="tool-panels">
+                            <div id="tool-wifi" class="tool-panel" role="tabpanel" style="display:block;">
+                                <div class="row">
+                                    <input class="btn btn-secondary" type="button" id="wifiScanButton" value="Scan networks" />
+                                </div>
+                                <div class="row mt-8" id="wifiHint" style="display:none;">
+                                    <span class="muted">Select a network below and then press Connect.</span>
+                                </div>
+                                <table id="wifiTable" class="mt-8 wifi-table" style="display:none;">
+                                    <thead>
+                                        <tr>
+                                            <th class="col-select">Select</th>
+                                            <th>Network</th>
+                                            <th>Strength</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="wifiTableBody"></tbody>
+                                </table>
+                                <div class="row mt-12" id="wifiSelectionBox" style="display:none; align-items: center; gap: 12px;">
+                                    <span class="muted">Selected:</span>
+                                    <strong id="wifiSelectedSsidLabel"></strong>
+                                    <label class="field" id="wifiPwdField" style="display:none;">Password: <input type="password" id="wifiPassword" placeholder="Password" /></label>
+                                    <input class="btn btn-primary" type="button" id="wifiConnectButton" value="Connect" />
+                                </div>
+                                <div class="row mt-8">
+                                    <span id="wifiStatusMsg" class="muted"></span>
+                                </div>
+                            </div>
+                            <div id="tool-mdns" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-uvc" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-stream" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-mode" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-pwm" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-logs" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                            <div id="tool-summary" class="tool-panel" role="tabpanel" style="display:none;"></div>
+                        </div>
+                    </div>
+                </section>
+            </main>
         </div>
         <script src="index.ts" type="module"></script>
-        <script>
+                <script>
             // Safari 3.0+ "[object HTMLElementConstructor]"
             var isSafari = /constructor/i.test(window.HTMLElement) || (function (p) { return p.toString() === "[object SafariRemoteNotification]"; })(!window['safari'] || (typeof safari !== 'undefined' && window['safari'].pushNotification));
 
             if(isSafari)
             {
-               document.getElementById("safariErr").style.display = "inline";
+               document.getElementById("safariErr").style.display = "block";
                document.getElementById("main").style.display = "none";
             }
+                        // Console expand/close controls
+                        (function(){
+                            var wrap = document.getElementById('terminalWrapper');
+                            var bar = document.getElementById('terminalBar');
+                            var btnExpand = document.getElementById('terminalExpandBtn');
+                            var btnClose = document.getElementById('terminalCloseBtn');
+                            var isFull = false;
+                function setFull(full){
+                                isFull = full;
+                                wrap.classList.toggle('fullscreen', !!full);
+                                document.body.style.overflow = full ? 'hidden' : '';
+                                // Resize rows to suit mode (simple heuristic)
+                                try {
+                    if (window.adjustTerminalSize) window.adjustTerminalSize();
+                    else if (window.term && typeof window.term.resize === 'function') { window.term.resize(120, full ? 40 : 20); }
+                                } catch(e){}
+                                setTimeout(function(){ window.dispatchEvent(new Event('resize')); }, 60);
+                            }
+                            if (btnExpand) btnExpand.addEventListener('click', function(){ setFull(true); });
+                            if (btnClose) btnClose.addEventListener('click', function(){ setFull(false); });
+                            document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && isFull){ setFull(false); }});
+                        })();
+                        // Enable tabs when connected (auto-switch to Flashing)
+                                                (function(){
+                                                    var lblConnTo = document.getElementById('lblConnTo');
+                                                    var tabProgram = document.querySelector('#tabs .tab[data-target="program"]');
+                                                    var tabConsole = document.querySelector('#tabs .tab[data-target="console"]');
+                                                    var tabTools = document.querySelector('#tabs .tab[data-target="tools"]');
+                                                    function enable(){
+                                                        tabProgram && tabProgram.classList.remove('disabled');
+                                                        tabConsole && tabConsole.classList.remove('disabled');
+                                                        tabTools && tabTools.classList.remove('disabled');
+                            // Switch to Flashing when a connection is established
+                            if (tabProgram) { tabProgram.click(); }
+                                                    }
+                                                    var mo = new MutationObserver(function(){
+                                                        if (lblConnTo && lblConnTo.style.display !== 'none') { enable(); }
+                                                    });
+                                                    if (lblConnTo) mo.observe(lblConnTo, { attributes: true, attributeFilter: ['style'] });
+                                                })();
+                                                // Tabs switching
+                        (function(){
+                                                    var tabs = Array.from(document.querySelectorAll('#tabs .tab'));
+                                                    function show(id){
+                            ['program','console','tools'].forEach(function(section){
+                                                            var el = document.getElementById(section);
+                                                            if (el) el.style.display = (section === id) ? 'block' : 'none';
+                                                        });
+                                                    }
+                                                    tabs.forEach(function(tab){
+                                                        tab.addEventListener('click', function(){
+                                                            if (tab.classList.contains('disabled')) return;
+                                                            // Block Tools tab when not connected, align with other tabs
+                                                            if (tab.dataset.target === 'tools' && !window.isConnected) return;
+                                                            var leavingConsole = document.querySelector('#tabs .tab.active[data-target="console"]');
+                                                            if (leavingConsole && tab.dataset.target !== 'console' && window.softStopConsole) {
+                                                                try { window.softStopConsole(); } catch(e){}
+                                                            }
+                                                            tabs.forEach(function(t){ t.classList.remove('active'); });
+                                                            tab.classList.add('active');
+                                                            show(tab.dataset.target);
+                                                            if (tab.dataset.target === 'console') setTimeout(function(){ window.dispatchEvent(new Event('resize')); }, 60);
+                                                        });
+                                                    });
+                                                    // initial: both hidden, Connect visible by default
+                                                    show(null);
+                                                })();
+                                                // Subtabs (Tools) switching
+                                                (function(){
+                                                    var subtabs = Array.from(document.querySelectorAll('#toolTabs .subtab'));
+                                                    function showPanel(id){
+                                                        var panels = Array.from(document.querySelectorAll('.tool-panel'));
+                                                        panels.forEach(function(p){ p.style.display = (p.id === id) ? 'block' : 'none'; });
+                                                    }
+                                                    subtabs.forEach(function(tab){
+                                                        tab.addEventListener('click', function(){
+                                                            subtabs.forEach(function(t){ t.classList.remove('active'); t.setAttribute('aria-selected','false'); });
+                                                            tab.classList.add('active');
+                                                            tab.setAttribute('aria-selected','true');
+                                                            showPanel(tab.dataset.target);
+                                                        });
+                                                    });
+                                                    var firstActive = document.querySelector('#toolTabs .subtab.active');
+                                                    if (firstActive) showPanel(firstActive.getAttribute('data-target'));
+                                                })();
         </script>
     </body>
 </html>
