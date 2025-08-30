@@ -126,7 +126,7 @@ body {
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .field { display: flex; align-items: center; gap: 8px; }
 
-select, input[type="text"], input[type="number"] {
+select, input[type="text"], input[type="number"], input[type="password"] {
   background: #0e1523;
   color: var(--text);
   border: 1px solid var(--border);
@@ -169,6 +169,10 @@ select, input[type="text"], input[type="number"] {
   font-size: 13px;
   font-weight: 400;
 }
+.alert.success {
+  border-left-color: rgba(47, 209, 128, 0.7); /* success accent */
+  color: #cfeedd;
+}
 .alert .close {
   float: right;
   cursor: pointer;
@@ -195,6 +199,7 @@ tbody tr:hover { background: #0f1625; }
 .wifi-table td.col-select { text-align: center; }
 .wifi-table .wifi-ssid { cursor: pointer; }
 .wifi-table tr.active { outline: 2px solid rgba(34, 211, 238, 0.35); outline-offset: -2px; }
+.wifi-table tr.active td { background: rgba(34, 211, 238, 0.06); }
 .wifi-table input[type="radio"] {
   width: 16px; height: 16px;
   accent-color: var(--accent);
@@ -213,19 +218,18 @@ tbody tr:hover { background: #0f1625; }
   align-items: center;
   flex-wrap: wrap;
 }
-#wifiSelectionBox .muted { font-size: 13px; }
+#wifiSelectionBox .muted { font-size: 13px; color: var(--muted); }
+#wifiSelectionBox .btn { height: 36px; }
+#wifiPwdField { display: inline-flex; align-items: center; gap: 8px; }
 #wifiSelectedSsidLabel {
-  max-width: 320px;
   display: inline-block;
+  flex: 0 1 200px; /* narrower so Password sits closer */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-#wifiPwdField input[type="password"] {
-  height: 36px; /* match .btn */
-  padding: 0 10px;
-  min-width: 220px;
-}
+#wifiPwdField input[type="password"] { min-width: 200px; padding: 8px 10px; height: auto; }
+#wifiPwdField .muted { color: var(--muted); }
 
 /* Progress cell */
 .progress-cell progress {
@@ -242,7 +246,8 @@ tbody tr:hover { background: #0f1625; }
   overflow: hidden; /* ensures xterm viewport stays within */
 }
 #terminal {
-  height: 360px; /* small mode height */
+  /* Let xterm define its own height based on rows; avoids bottom gap */
+  height: auto;
   /* allow text selection for copy */
   -webkit-user-select: text;
   -moz-user-select: text;
@@ -278,6 +283,10 @@ tbody tr:hover { background: #0f1625; }
 }
 .terminal-bar .title { font-size: 14px; color: var(--muted); }
 .terminal-bar .actions .btn { height: 28px; padding: 0 10px; font-size: 12px; }
+/* Ensure last console row is not clipped in fullscreen */
+.terminal-wrapper.fullscreen .xterm-viewport { padding-bottom: 6px; }
+/* Also add a small padding in all modes to avoid fractional clipping */
+.xterm-viewport { padding-bottom: 6px; }
 
 /* Small helpers */
 .spacer { flex: 1; }
@@ -421,7 +430,8 @@ details.advanced > summary:hover { opacity: 1; }
 /* Remove top border on tab content panels so there is no underline below tabs */
 #program.card,
 #console.card,
-#tools.card {
+#tools.card,
+#update.card {
   border-top: none;
 }
 
@@ -473,6 +483,42 @@ details.advanced .btn.btn-secondary:hover {
 }
 /* Slightly reduce built-in margins within Advanced */
 details.advanced .mt-8 { margin-top: 6px; }
+/* Flashing > Advanced specific spacing adjustments */
+.legacy-row { margin-top: 12px; margin-bottom: 10px; }
+.flash-erase-row { margin-top: 10px; }
+/* Use scoped overrides to fine-tune spacing inside Flashing Advanced */
+details.advanced.flash-adv #fileTable { margin-top: 0; margin-bottom: 8px; }
+/* Slightly reduce spacing between the table and the following Add File row */
+details.advanced.flash-adv #fileTable + .row { margin-top: 4px !important; }
+
+/* Flashing Advanced: modern, airier look without affecting other Advanced blocks */
+details.advanced.flash-adv > summary {
+  font-size: 14px;
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+details.advanced.flash-adv .advanced-body {
+  padding: 12px;
+  margin-top: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #0e1522, #0a0f18);
+}
+details.advanced.flash-adv .row { gap: 10px; }
+details.advanced.flash-adv .toggle { color: var(--text); opacity: 0.9; }
+details.advanced.flash-adv .toggle input[type="checkbox"] { transform: translateY(2px); }
+details.advanced.flash-adv .btn { height: 32px; font-size: 13px; }
+/* Subtle divider before the table for clarity */
+details.advanced.flash-adv .legacy-row + #fileTable {
+  position: relative;
+}
+details.advanced.flash-adv .legacy-row + #fileTable::before {
+  content: "";
+  display: block;
+  height: 1px;
+  background: rgba(255,255,255,0.06);
+  margin: 10px 0 12px 0; /* clearer separation from Show legacy to table */
+}
 
 /* Make firmware dropdown wider so long names are visible */
 #prebuiltSelect {
@@ -516,14 +562,16 @@ details.advanced .mt-8 { margin-top: 6px; }
 /* Remove section titles and header divider for panels under the main tabs */
 #program .card-header,
 #console .card-header,
-#tools .card-header {
+#tools .card-header,
+#update .card-header {
   border-bottom: none;
   padding-top: 0;
   padding-bottom: 0;
 }
 #program .card-title,
 #console .card-title,
-#tools .card-title { display: none; }
+#tools .card-title,
+#update .card-title { display: none; }
 
 @media (max-width: 560px) {
   .subtabs { flex-wrap: wrap; }

@@ -71,6 +71,7 @@
                 <li class="tab disabled" data-target="program">Flashing</li>
                 <li class="tab disabled" data-target="console">Console</li>
                 <li class="tab disabled" data-target="tools">Tools</li>
+                <li class="tab disabled" data-target="update">Update</li>
             </ul>
     <section class="card" id="program" style="display:none;">
                     <div class="card-header">
@@ -92,16 +93,16 @@
                                 </label>
                             </div>
 
-                            <details class="advanced mt-12">
+                            <details class="advanced mt-12 flash-adv">
                                 <summary>Advanced</summary>
                                 <div class="advanced-body">
-                                    <div class="row mt-8">
+                                    <div class="row mt-8 flash-erase-row">
                                         <input class="btn btn-danger" type="button" id="eraseButton" value="Erase Flash" />
                                     </div>
-                                    <div class="row mt-8">
+                                    <div class="row legacy-row">
                                         <label class="toggle" for="showLegacy">
                                             <input type="checkbox" id="showLegacy" />
-                                            Show legacy firmware
+                                            Show legacy firmware in Dropdown
                                         </label>
                                     </div>
                                     <table id="fileTable">
@@ -128,12 +129,20 @@
                     </div>
                 </section>
 
+                <!-- Update tab content (initially empty, same behavior as other tabs) -->
+                <section class="card" id="update" style="display:none;">
+                    <div class="card-header">
+                        <h2 class="card-title">Update</h2>
+                    </div>
+                    <div class="card-body">
+                        <!-- Intentionally left blank for now -->
+                    </div>
+                </section>
+
                                 <section class="card" id="console" style="display:none;">
                     <div class="card-header">
                         <h2 class="card-title">Console</h2>
-                        <div class="row">
-                            <label style="display:none" id="lblConsoleFor">Connected to device: </label>
-                        </div>
+                        <div class="row" style="min-height: 8px;"></div>
                     </div>
                     <div class="card-body">
                         <div class="row">
@@ -187,10 +196,10 @@
                                     </thead>
                                     <tbody id="wifiTableBody"></tbody>
                                 </table>
-                                <div class="row mt-12" id="wifiSelectionBox" style="display:none; align-items: center; gap: 12px;">
+                                <div class="row mt-12" id="wifiSelectionBox" style="display:none; align-items: center; gap: 4px;">
                                     <span class="muted">Selected:</span>
                                     <strong id="wifiSelectedSsidLabel"></strong>
-                                    <label class="field" id="wifiPwdField" style="display:none;">Password: <input type="password" id="wifiPassword" placeholder="Password" /></label>
+                                    <label class="field" id="wifiPwdField" style="display:none;"><span class="muted">Password:</span> <input type="password" id="wifiPassword" placeholder="Password" /></label>
                                     <input class="btn btn-primary" type="button" id="wifiConnectButton" value="Connect" />
                                 </div>
                                 <div class="row mt-8">
@@ -247,10 +256,12 @@
                                                     var tabProgram = document.querySelector('#tabs .tab[data-target="program"]');
                                                     var tabConsole = document.querySelector('#tabs .tab[data-target="console"]');
                                                     var tabTools = document.querySelector('#tabs .tab[data-target="tools"]');
+                                                    var tabUpdate = document.querySelector('#tabs .tab[data-target="update"]');
                                                     function enable(){
                                                         tabProgram && tabProgram.classList.remove('disabled');
                                                         tabConsole && tabConsole.classList.remove('disabled');
                                                         tabTools && tabTools.classList.remove('disabled');
+                                                        tabUpdate && tabUpdate.classList.remove('disabled');
                             // Switch to Flashing when a connection is established
                             if (tabProgram) { tabProgram.click(); }
                                                     }
@@ -263,7 +274,7 @@
                         (function(){
                                                     var tabs = Array.from(document.querySelectorAll('#tabs .tab'));
                                                     function show(id){
-                            ['program','console','tools'].forEach(function(section){
+                            ['program','console','tools','update'].forEach(function(section){
                                                             var el = document.getElementById(section);
                                                             if (el) el.style.display = (section === id) ? 'block' : 'none';
                                                         });
@@ -272,7 +283,7 @@
                                                         tab.addEventListener('click', function(){
                                                             if (tab.classList.contains('disabled')) return;
                                                             // Block Tools tab when not connected, align with other tabs
-                                                            if (!window.isConnected && tab.dataset.target === 'tools') return;
+                                                            if (!window.isConnected && (tab.dataset.target === 'tools' || tab.dataset.target === 'update')) return;
                                                             var leavingConsole = document.querySelector('#tabs .tab.active[data-target="console"]');
                                                             if (leavingConsole && tab.dataset.target !== 'console' && window.softStopConsole) {
                                                                 try { window.softStopConsole(); } catch(e){}

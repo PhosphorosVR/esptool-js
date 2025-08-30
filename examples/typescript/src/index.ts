@@ -19,6 +19,8 @@ const lblConsoleFor = document.getElementById("lblConsoleFor");
 const lblConnTo = document.getElementById("lblConnTo");
 const table = document.getElementById("fileTable") as HTMLTableElement;
 const alertDiv = document.getElementById("alertDiv");
+// Timer handle for auto-dismissing program alerts (success)
+let programAlertTimer: any = null;
 // Connection status UI bits (dot and alert in the Connect card)
 const connStatusDot = document.getElementById("connStatusDot") as HTMLElement | null;
 const connectAlert = document.getElementById("connectAlert") as HTMLElement | null;
@@ -162,7 +164,20 @@ async function wifiScanAndDisplay() {
     statusEl && (statusEl.textContent = 'Scanning...');
     await sendJsonCommand('pause', { pause: true }, 5000);
     const scanResp = await sendJsonCommand('scan_networks', undefined, 30000);
-    const nets = parseNetworksFromResults(scanResp);
+    // Parse and normalize results
+    const raw = parseNetworksFromResults(scanResp) || [];
+    // 1) Drop hidden networks (no SSID)
+    // 2) Deduplicate by SSID, keeping the strongest RSSI
+    const bestBySsid = new Map<string, {ssid: string; rssi: number; channel: number; auth_mode: number; mac_address?: string}>();
+    for (const n of raw) {
+      const ssid = (n?.ssid || '').trim();
+      if (!ssid) continue; // skip hidden
+      const prev = bestBySsid.get(ssid);
+      if (!prev || ((n?.rssi ?? -999) > (prev?.rssi ?? -999))) {
+        bestBySsid.set(ssid, n);
+      }
+    }
+    const nets = Array.from(bestBySsid.values());
     nets.sort((a, b) => (b.rssi || -999) - (a.rssi || -999));
   const tableEl = document.getElementById('wifiTable') as HTMLElement | null;
   const body = document.getElementById('wifiTableBody') as HTMLElement | null;
@@ -184,7 +199,7 @@ async function wifiScanAndDisplay() {
       const open = (n.auth_mode === 0);
       const radioId = `wifiSel_${idx}`;
       const lockIcon = open ? '🔓' : '🔒';
-      const label = n.ssid && n.ssid.length ? n.ssid : '<hidden>';
+      const label = n.ssid; // hidden SSIDs were filtered out
       tr.innerHTML = `
         <td class="col-select"><input type="radio" name="wifiNet" id="${radioId}" /></td>
         <td><label for="${radioId}" class="wifi-ssid">${lockIcon} ${label}</label></td>
@@ -196,11 +211,13 @@ async function wifiScanAndDisplay() {
         if (!radio.checked) return;
         Array.from((body as HTMLElement).children).forEach((row) => row.classList.remove('active'));
         tr.classList.add('active');
-        if (ssidLabel) ssidLabel.textContent = label.replace('&lt;hidden&gt;', '<hidden>');
+  if (ssidLabel) ssidLabel.textContent = label;
         if (selBox) selBox.style.display = 'flex';
         if (pwdField) pwdField.style.display = open ? 'none' : 'inline-block';
         (ssidLabel as any)._auth_mode = n.auth_mode;
         (ssidLabel as any)._ssid = n.ssid || '';
+  // Hide the 'Found X networks' status once a network is selected
+  try { if (statusEl) statusEl.textContent = ''; } catch {}
       });
       body?.appendChild(tr);
     });
@@ -297,7 +314,7 @@ function stopPortPresenceMonitor() {
 declare let Terminal; // Terminal is imported in HTML script
 declare let CryptoJS; // CryptoJS is imported in HTML script
 
-const term = new Terminal({ cols: 120, rows: 40, convertEol: true, scrollback: 5000 });
+const term = new Terminal({ cols: 120, rows: 39, convertEol: true, scrollback: 5000 });
 // Expose globally for UI resize logic
 // @ts-ignore
 ;(window as any).term = term;
@@ -314,8 +331,8 @@ function adjustTerminalSize() {
   try {
     const wrap = document.getElementById('terminalWrapper');
     const isFull = wrap?.classList.contains('fullscreen');
-    // Small mode uses ~20 rows, fullscreen uses ~40 rows
-    term.resize(120, isFull ? 40 : 20);
+  // Small mode uses ~20 rows, fullscreen uses ~39 rows (avoids bottom clipping)
+  term.resize(120, isFull ? 39 : 20);
   } catch {}
 }
 // Expose for inline scripts
@@ -398,7 +415,8 @@ function setTabsEnabled(enabled: boolean) {
     const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
     const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
     const tabTools = document.querySelector('#tabs .tab[data-target="tools"]') as HTMLElement | null;
-    [tabProgram, tabConsole, tabTools].forEach(t => t && t.classList.toggle('disabled', !enabled));
+  const tabUpdate = document.querySelector('#tabs .tab[data-target="update"]') as HTMLElement | null;
+  [tabProgram, tabConsole, tabTools, tabUpdate].forEach(t => t && t.classList.toggle('disabled', !enabled));
   } catch {}
 }
 
@@ -925,11 +943,14 @@ async function handlePortDisconnected(msg?: string) {
     const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
     const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
     const tabTools = document.querySelector('#tabs .tab[data-target="tools"]') as HTMLElement | null;
-    [tabProgram, tabConsole, tabTools].forEach((t) => {
+  const tabUpdate = document.querySelector('#tabs .tab[data-target="update"]') as HTMLElement | null;
+  [tabProgram, tabConsole, tabTools, tabUpdate].forEach((t) => {
       if (t) { t.classList.add('disabled'); t.classList.remove('active'); }
     });
     const toolsSec = document.getElementById('tools') as HTMLElement | null;
     if (toolsSec) toolsSec.style.display = 'none';
+  const updSec = document.getElementById('update') as HTMLElement | null;
+  if (updSec) updSec.style.display = 'none';
   } catch {}
   cleanUp();
   isConnected = false;
@@ -967,7 +988,8 @@ disconnectButton.onclick = async () => {
   const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
   const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
   const tabTools = document.querySelector('#tabs .tab[data-target="tools"]') as HTMLElement | null;
-  [tabProgram, tabConsole, tabTools].forEach((t) => {
+  const tabUpdate = document.querySelector('#tabs .tab[data-target="update"]') as HTMLElement | null;
+  [tabProgram, tabConsole, tabTools, tabUpdate].forEach((t) => {
     if (t) {
       t.classList.add("disabled");
       t.classList.remove("active");
@@ -976,6 +998,8 @@ disconnectButton.onclick = async () => {
   // Hide Tools section as well
   const toolsSec = document.getElementById('tools') as HTMLElement | null;
   if (toolsSec) toolsSec.style.display = 'none';
+  const updSec = document.getElementById('update') as HTMLElement | null;
+  if (updSec) updSec.style.display = 'none';
   cleanUp();
   isConnected = false;
   // @ts-ignore
@@ -990,7 +1014,7 @@ async function softStopConsole() {
   try { consoleStartButton.style.display = 'initial'; } catch {}
   try { consoleStopButton.style.display = 'none'; } catch {}
   try { resetButton.style.display = 'none'; } catch {}
-  try { lblConsoleFor.style.display = 'none'; } catch {}
+  try { /* no console header label */ } catch {}
 }
 // @ts-ignore
 ;(window as any).softStopConsole = softStopConsole;
@@ -1009,9 +1033,7 @@ consoleStartButton.onclick = async () => {
       try { await transport.waitForUnlock(500); } catch {}
     }
     transport = new Transport(device, true);
-  // Console header: keep it minimal here, detailed info stays in the top connect section
-  lblConsoleFor.textContent = 'Connected';
-  lblConsoleFor.style.display = 'block';
+  // No console header label; leave just spacing and buttons
     consoleStartButton.style.display = 'none';
     consoleStopButton.style.display = 'initial';
     resetButton.style.display = 'initial';
@@ -1165,6 +1187,10 @@ function validateProgramInputs() {
 
 programButton.onclick = async () => {
   const alertMsg = document.getElementById("programAlertMsg");
+  // Ensure alert starts clean (remove success state)
+  try { alertDiv.classList.remove('success'); } catch {}
+  // Clear any pending auto-dismiss timer from previous runs
+  try { if (programAlertTimer) { clearTimeout(programAlertTimer); programAlertTimer = null; } } catch {}
   // Require either a prebuilt firmware selection or at least one uploaded file
   const hasPrebuilt = !!(prebuiltSelect && prebuiltSelect.value);
   let hasCustom = false;
@@ -1257,6 +1283,19 @@ programButton.onclick = async () => {
     } as FlashOptions;
     await esploader.writeFlash(flashOptions);
     await esploader.after();
+    // Success UI: show a green success alert and write to console
+    try {
+      alertMsg.textContent = 'Flashing successful.';
+      alertDiv.classList.add('success');
+      alertDiv.style.display = 'block';
+      // Auto-hide after 5 seconds
+      if (programAlertTimer) { try { clearTimeout(programAlertTimer); } catch {} }
+      programAlertTimer = setTimeout(() => {
+        try { alertDiv.style.display = 'none'; alertDiv.classList.remove('success'); } catch {}
+        programAlertTimer = null;
+      }, 5000);
+    } catch {}
+    try { term.writeln('\r\n[Flashing successful]'); } catch {}
   } catch (e) {
     console.error(e);
     term.writeln(`Error: ${e.message}`);
