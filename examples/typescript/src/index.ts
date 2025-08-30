@@ -362,6 +362,16 @@ async function handlePortDisconnected(reason: string = 'Device disconnected') {
     if (traceButton) traceButton.style.display = 'none';
     if (eraseButton) eraseButton.style.display = 'none';
     if (filesDiv) (filesDiv as HTMLElement).style.display = 'none';
+    // Disable all main tabs when disconnected and hide their panels
+    try {
+      setTabsEnabled(false);
+      const tabs = Array.from(document.querySelectorAll('#tabs .tab')) as HTMLElement[];
+      tabs.forEach(t => t.classList.remove('active'));
+      ['program','console','tools','update'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) (el as HTMLElement).style.display = 'none';
+      });
+    } catch {}
     showConnectAlert(reason);
   } catch {}
 }
