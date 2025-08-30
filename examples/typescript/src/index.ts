@@ -15,7 +15,6 @@ const programDiv = document.getElementById("program");
 const consoleDiv = document.getElementById("console");
 const lblBaudrate = document.getElementById("lblBaudrate");
 // No separate console baud selector; reuse the connected baudrate
-const lblConsoleFor = document.getElementById("lblConsoleFor");
 const lblConnTo = document.getElementById("lblConnTo");
 const table = document.getElementById("fileTable") as HTMLTableElement;
 const alertDiv = document.getElementById("alertDiv");
@@ -48,6 +47,22 @@ function hideConnectAlert() {
 }
 
 const debugLogging = document.getElementById("debugLogging") as HTMLInputElement;
+const debugLogEl = document.getElementById('debugLog') as HTMLElement | null;
+function dbg(msg: string, dir: 'tx'|'rx'|'info' = 'info') {
+  try {
+    if (!debugLogEl) return;
+    // Always show info-level logs (like pytool.py shows "Sending:" etc.).
+    // Gate raw TX/RX noise behind the Debug checkbox.
+    if (dir !== 'info' && debugLogging && !debugLogging.checked) return;
+    const ts = new Date().toISOString().split('T')[1].replace('Z','');
+    let prefix = '--';
+    if (dir === 'tx') prefix = '📤';
+    else if (dir === 'rx') prefix = '📡';
+    debugLogEl.textContent += `[${ts}] ${prefix} ${msg}\n`;
+    debugLogEl.scrollTop = debugLogEl.scrollHeight;
+  } catch {}
+}
+
 const demoModeEl = document.getElementById("demoMode") as HTMLInputElement | null;
 
 function switchToConsoleTab() {
@@ -72,7 +87,8 @@ async function sendJsonCommand(command: string, params?: any, timeoutMs = 15000)
   const cmdObj: any = { commands: [{ command }] };
   if (params !== undefined) cmdObj.commands[0].data = params;
   const payload = JSON.stringify(cmdObj) + "\n";
-
+  // Always show user-intent command sends like pytool.py
+  try { dbg(`Sending: ${payload.trim()}`, 'info'); } catch {}
   const enc = new TextEncoder();
   const data = enc.encode(payload);
   // @ts-ignore
@@ -96,6 +112,15 @@ async function sendJsonCommand(command: string, params?: any, timeoutMs = 15000)
     if (done) break;
     if (!value) continue;
     buffer += dec.decode(value, { stream: true });
+    try {
+      if (buffer) {
+        // Raw chunks only when Debug is enabled
+        dbg(`Raw: ${JSON.stringify(buffer)}`, 'rx');
+        // Also mirror a short buffer tail when in debug for easier inspection
+        const tail = buffer.slice(-200);
+        if (tail && tail.length < buffer.length) dbg(`Buffer: ${JSON.stringify(tail)}`, 'rx');
+      }
+    } catch {}
 
     // Special handling: scan_networks may emit a raw multi-line JSON {"networks":[...]}
     if (command === 'scan_networks') {
@@ -113,15 +138,17 @@ async function sendJsonCommand(command: string, params?: any, timeoutMs = 15000)
       if (!trimmed) continue;
       try {
         const obj = JSON.parse(trimmed);
+  try { dbg(`Received: ${JSON.stringify(obj)}`, 'info'); } catch {}
         return obj;
       } catch {
         const startIdx = trimmed.indexOf("{");
         const endIdx = trimmed.lastIndexOf("}");
         if (startIdx !== -1 && endIdx > startIdx) {
-          try {
-            const obj = JSON.parse(trimmed.slice(startIdx, endIdx + 1));
-            return obj;
-          } catch {}
+            try {
+              const obj = JSON.parse(trimmed.slice(startIdx, endIdx + 1));
+              try { dbg(`Received: ${JSON.stringify(obj)}`, 'info'); } catch {}
+              return obj;
+            } catch {}
         }
       }
     }
@@ -311,6 +338,34 @@ function stopPortPresenceMonitor() {
   }
 }
 
+// Gracefully handle underlying serial port disconnection
+async function handlePortDisconnected(reason: string = 'Device disconnected') {
+  try { dbg(`Port disconnected: ${reason}`, 'info'); } catch {}
+  try { stopPortPresenceMonitor(); } catch {}
+  try { isConsoleClosed = true; } catch {}
+  try {
+    if (transport) {
+      try { await transport.disconnect(); } catch {}
+      try { await transport.waitForUnlock(500); } catch {}
+    }
+  } catch {}
+  try {
+    isConnected = false;
+    // @ts-ignore
+    (window as any).isConnected = false;
+    updateConnStatusDot(false);
+    if (lblConnTo) (lblConnTo as HTMLElement).style.display = 'none';
+    if (lblBaudrate) (lblBaudrate as HTMLElement).style.display = 'initial';
+    if (baudrates) (baudrates as any).style.display = 'initial';
+    if (connectButton) connectButton.style.display = 'initial';
+    if (disconnectButton) disconnectButton.style.display = 'none';
+    if (traceButton) traceButton.style.display = 'none';
+    if (eraseButton) eraseButton.style.display = 'none';
+    if (filesDiv) (filesDiv as HTMLElement).style.display = 'none';
+    showConnectAlert(reason);
+  } catch {}
+}
+
 declare let Terminal; // Terminal is imported in HTML script
 declare let CryptoJS; // CryptoJS is imported in HTML script
 
@@ -399,6 +454,7 @@ let esploader: ESPLoader;
 let deviceMac: string = null;
 let lastBaud: number = 115200; // track the active baudrate used for connections
 let isConnected = false;
+let isConsoleClosed = true;
 // @ts-ignore
 (window as any).isConnected = isConnected;
 
@@ -744,11 +800,12 @@ if (showLegacyEl) {
 
 connectButton.onclick = async () => {
   try {
-  // Prepare UI: clear any alert and set dot to disconnected until success
-  hideConnectAlert();
-  updateConnStatusDot(false);
-  // If console loop is running, stop it before (re)connecting
-  isConsoleClosed = true;
+    try { dbg('Connect clicked', 'info'); } catch {}
+    // Prepare UI: clear any alert and set dot to disconnected until success
+    hideConnectAlert();
+    updateConnStatusDot(false);
+    // If console loop is running, stop it before (re)connecting
+    isConsoleClosed = true;
     if (device === null) {
       device = await serialLib.requestPort({});
     }
@@ -770,21 +827,21 @@ connectButton.onclick = async () => {
       console.warn("Could not read MAC:", e);
       deviceMac = null;
     }
-
-  // Temporarily broken
-  // await esploader.flashId();
-  console.log("Settings done for :" + chip);
-  lblBaudrate.style.display = "none";
-  // Build a friendly connection info line (chip · VID/PID · baud)
-  const info = extractDeviceInfo(transport?.device);
-  const parts: string[] = [];
-  if (chip) parts.push(cleanChipName(chip));
-  if (info.serial && info.product) parts.push(`${info.product} (SN ${info.serial})`);
-  else if (info.serial) parts.push(`SN ${info.serial}`);
-  else if (info.product && info.manufacturer) parts.push(`${info.manufacturer} ${info.product}`);
-  if (deviceMac) parts.push(deviceMac.toUpperCase());
-  if (baudrates?.value) parts.push(`${baudrates.value} baud`);
-  lblConnTo.innerHTML = `Connected: ${parts.join(" · ")}`;
+    try { dbg(`Connected to chip ${chip}${deviceMac ? ' MAC ' + deviceMac : ''}`, 'info'); } catch {}
+    // Temporarily broken
+    // await esploader.flashId();
+    console.log("Settings done for :" + chip);
+    lblBaudrate.style.display = "none";
+    // Build a friendly connection info line (chip · VID/PID · baud)
+    const info = extractDeviceInfo(transport?.device);
+    const parts: string[] = [];
+    if (chip) parts.push(cleanChipName(chip));
+    if (info.serial && info.product) parts.push(`${info.product} (SN ${info.serial})`);
+    else if (info.serial) parts.push(`SN ${info.serial}`);
+    else if (info.product && info.manufacturer) parts.push(`${info.manufacturer} ${info.product}`);
+    if (deviceMac) parts.push(deviceMac.toUpperCase());
+    if (baudrates?.value) parts.push(`${baudrates.value} baud`);
+    lblConnTo.innerHTML = `Connected: ${parts.join(" · ")}`;
     lblConnTo.style.display = "block";
     baudrates.style.display = "none";
     connectButton.style.display = "none";
@@ -792,232 +849,56 @@ connectButton.onclick = async () => {
     traceButton.style.display = "initial";
     eraseButton.style.display = "initial";
     filesDiv.style.display = "initial";
-  isConnected = true;
-  // @ts-ignore
-  (window as any).isConnected = true;
-  // Update status indicator to connected
-  updateConnStatusDot(true);
-  hideConnectAlert();
-  // Do not force-hide console panel; tabs manage visibility
-  // Explicitly switch to Flashing tab after connect
-  const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
-  if (tabProgram) tabProgram.click();
-  // Begin monitoring port in case it disappears
-  startPortPresenceMonitor();
+    isConnected = true;
+    // @ts-ignore
+    (window as any).isConnected = true;
+    // Update status indicator to connected
+    updateConnStatusDot(true);
+    hideConnectAlert();
+    // Do not force-hide console panel; tabs manage visibility
+    // Explicitly switch to Flashing tab after connect
+    const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
+    if (tabProgram) tabProgram.click();
+    // Begin monitoring port in case it disappears
+    startPortPresenceMonitor();
   } catch (e) {
     console.error(e);
     term.writeln(`Error: ${e.message}`);
-  isConnected = false;
-  // @ts-ignore
-  (window as any).isConnected = false;
-  updateConnStatusDot(false);
-  showConnectAlert(`Connection failed: ${e?.message || e}`);
+    isConnected = false;
+    // @ts-ignore
+    (window as any).isConnected = false;
+    updateConnStatusDot(false);
+    showConnectAlert(`Connection failed: ${e?.message || e}`);
+    try { dbg(`Connect error ${e?.message || e}`, 'info'); } catch {}
   }
 };
 
 traceButton.onclick = async () => {
   if (transport) {
+    try { dbg('Trace requested', 'info'); } catch {}
     transport.returnTrace();
   }
 };
 
-resetButton.onclick = async () => {
-  if (transport) {
-    await transport.setDTR(false);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await transport.setDTR(true);
-  }
-};
-
 eraseButton.onclick = async () => {
+  try { dbg('Erase flash requested', 'info'); } catch {}
   eraseButton.disabled = true;
   try {
-  // Ensure console loop is stopped before erase
-  isConsoleClosed = true;
-  // Switch to Console view when erase starts
-  switchToConsoleTab();
+    // Ensure console loop is stopped before erase
+    isConsoleClosed = true;
+    // Switch to Console view when erase starts
+    switchToConsoleTab();
     await esploader.eraseFlash();
+    try { dbg('Erase flash done', 'info'); } catch {}
   } catch (e) {
     console.error(e);
     term.writeln(`Error: ${e.message}`);
+    try { dbg(`Erase error ${e?.message || e}`, 'info'); } catch {}
   } finally {
     eraseButton.disabled = false;
   }
 };
 
-addFileButton.onclick = () => {
-  const rowCount = table.rows.length;
-  const row = table.insertRow(rowCount);
-
-  //Column 1 - Offset
-  const cell1 = row.insertCell(0);
-  const element1 = document.createElement("input");
-  element1.type = "text";
-  element1.id = "offset" + rowCount;
-  element1.value = "0x0";
-  cell1.appendChild(element1);
-
-  // Column 2 - File selector
-  const cell2 = row.insertCell(1);
-  const element2 = document.createElement("input");
-  element2.type = "file";
-  element2.id = "selectFile" + rowCount;
-  element2.name = "selected_File" + rowCount;
-  element2.addEventListener("change", handleFileSelect, false);
-  cell2.appendChild(element2);
-
-  // Column 3  - Progress
-  const cell3 = row.insertCell(2);
-  cell3.classList.add("progress-cell");
-  cell3.style.display = "none";
-  cell3.innerHTML = `<progress value="0" max="100"></progress>`;
-
-  // Column 4  - Remove File
-  const cell4 = row.insertCell(3);
-  cell4.classList.add("action-cell");
-  if (rowCount > 1) {
-    const element4 = document.createElement("input");
-    element4.type = "button";
-    const btnName = "button" + rowCount;
-    element4.name = btnName;
-    element4.setAttribute("class", "btn");
-    element4.setAttribute("value", "Remove"); // or element1.value = "button";
-    element4.onclick = function () {
-      removeRow(row);
-    };
-    cell4.appendChild(element4);
-  }
-};
-
-  stopPortPresenceMonitor();
-/**
- * The built in HTMLTableRowElement object.
- * @external HTMLTableRowElement
- * @see {@link https://developer.mozilla.org/en-US/docs/Web/API/HTMLTableRowElement}
- */
-
-/**
- * Remove file row from HTML Table
- * @param {HTMLTableRowElement} row Table row element to remove
- */
-function removeRow(row: HTMLTableRowElement) {
-  const rowIndex = Array.from(table.rows).indexOf(row);
-  table.deleteRow(rowIndex);
-}
-
-/**
- * Clean devices variables on chip disconnect. Remove stale references if any.
- */
-function cleanUp() {
-  device = null;
-  transport = null;
-  chip = null;
-  deviceMac = null;
-}
-
-// Force UI back to Connect state if serial port is unplugged or vanishes
-async function handlePortDisconnected(msg?: string) {
-  if (!isConnected && !transport) return; // nothing to do
-  // Stop console loop and disconnect transport to release locks
-  try { isConsoleClosed = true; } catch {}
-  try { await transport?.disconnect?.(); } catch {}
-  try { await transport?.waitForUnlock?.(500); } catch {}
-  stopPortPresenceMonitor();
-  // Reset UI similar to manual Disconnect
-  try { term.reset(); } catch {}
-  try { lblBaudrate.style.display = "initial"; } catch {}
-  try { baudrates.style.display = "initial"; } catch {}
-  try { connectButton.style.display = "initial"; } catch {}
-  try { disconnectButton.style.display = "none"; } catch {}
-  try { traceButton.style.display = "none"; } catch {}
-  try { eraseButton.style.display = "none"; } catch {}
-  try { lblConnTo.style.display = "none"; } catch {}
-  try { filesDiv.style.display = "none"; } catch {}
-  try { alertDiv.style.display = "none"; } catch {}
-  // Update status indicator and show alert in Connect card
-  updateConnStatusDot(false);
-  showConnectAlert(msg || 'COM port disconnected.');
-  try { programDiv.style.display = "none"; } catch {}
-  try { consoleDiv.style.display = "none"; } catch {}
-  try {
-    const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
-    const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
-    const tabTools = document.querySelector('#tabs .tab[data-target="tools"]') as HTMLElement | null;
-  const tabUpdate = document.querySelector('#tabs .tab[data-target="update"]') as HTMLElement | null;
-  [tabProgram, tabConsole, tabTools, tabUpdate].forEach((t) => {
-      if (t) { t.classList.add('disabled'); t.classList.remove('active'); }
-    });
-    const toolsSec = document.getElementById('tools') as HTMLElement | null;
-    if (toolsSec) toolsSec.style.display = 'none';
-  const updSec = document.getElementById('update') as HTMLElement | null;
-  if (updSec) updSec.style.display = 'none';
-  } catch {}
-  cleanUp();
-  isConnected = false;
-  // @ts-ignore
-  (window as any).isConnected = false;
-  // Optional: inform the user in the console if visible
-  try { if (msg) term.writeln(`\r\n[${msg}]`); } catch {}
-}
-
-disconnectButton.onclick = async () => {
-  // If demo mode was active, just exit it without touching transport
-  if (demoModeEl && demoModeEl.checked) {
-    demoModeEl.checked = false;
-    exitDemoMode();
-    return;
-  }
-  if (transport) await transport.disconnect();
-  stopPortPresenceMonitor();
-
-  term.reset();
-  lblBaudrate.style.display = "initial";
-  baudrates.style.display = "initial";
-  connectButton.style.display = "initial";
-  disconnectButton.style.display = "none";
-  traceButton.style.display = "none";
-  eraseButton.style.display = "none";
-  lblConnTo.style.display = "none";
-  filesDiv.style.display = "none";
-  alertDiv.style.display = "none";
-  updateConnStatusDot(false);
-  showConnectAlert('COM port disconnected.');
-  // In tabbed layout: hide both Program and Console sections and disable tabs
-  programDiv.style.display = "none";
-  consoleDiv.style.display = "none";
-  const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
-  const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
-  const tabTools = document.querySelector('#tabs .tab[data-target="tools"]') as HTMLElement | null;
-  const tabUpdate = document.querySelector('#tabs .tab[data-target="update"]') as HTMLElement | null;
-  [tabProgram, tabConsole, tabTools, tabUpdate].forEach((t) => {
-    if (t) {
-      t.classList.add("disabled");
-      t.classList.remove("active");
-    }
-  });
-  // Hide Tools section as well
-  const toolsSec = document.getElementById('tools') as HTMLElement | null;
-  if (toolsSec) toolsSec.style.display = 'none';
-  const updSec = document.getElementById('update') as HTMLElement | null;
-  if (updSec) updSec.style.display = 'none';
-  cleanUp();
-  isConnected = false;
-  // @ts-ignore
-  (window as any).isConnected = false;
-};
-
-let isConsoleClosed = false;
-async function softStopConsole() {
-  // Stop only the read loop; keep transport open for other operations (flash/erase)
-  isConsoleClosed = true;
-  try { term.reset(); } catch {}
-  try { consoleStartButton.style.display = 'initial'; } catch {}
-  try { consoleStopButton.style.display = 'none'; } catch {}
-  try { resetButton.style.display = 'none'; } catch {}
-  try { /* no console header label */ } catch {}
-}
-// @ts-ignore
-;(window as any).softStopConsole = softStopConsole;
 consoleStartButton.onclick = async () => {
   try {
     // Show Console tab
@@ -1033,29 +914,30 @@ consoleStartButton.onclick = async () => {
       try { await transport.waitForUnlock(500); } catch {}
     }
     transport = new Transport(device, true);
-  // No console header label; leave just spacing and buttons
+    // No console header label; leave just spacing and buttons
     consoleStartButton.style.display = 'none';
     consoleStopButton.style.display = 'initial';
     resetButton.style.display = 'initial';
-  // Ensure we start scrolled to bottom in case prior content overflows
-  try {
-    adjustTerminalSize();
-    autoScroll = isAtBottom();
-    if (autoScroll) term.scrollToBottom();
-  } catch {}
+    // Ensure we start scrolled to bottom in case prior content overflows
+    try {
+      adjustTerminalSize();
+      autoScroll = isAtBottom();
+      if (autoScroll) term.scrollToBottom();
+    } catch {}
 
-  // Ensure transport is connected before starting read loop. Some browsers need an explicit connect after a prior disconnect.
+    // Ensure transport is connected before starting read loop. Some browsers need an explicit connect after a prior disconnect.
     try {
       // Fallback to UI baud if lastBaud isn't set yet
       const baud = lastBaud || parseInt(baudrates?.value || '115200');
       lastBaud = baud;
       await transport.connect(baud);
+      try { dbg(`Console transport connected ${baud}`, 'info'); } catch {}
     } catch (e) {
       // If already connected or transient, try once more after a brief delay.
       await new Promise(r => setTimeout(r, 100));
       try { await transport.connect(lastBaud); } catch (e2) { console.warn('Console connect issue:', e2); }
     }
-  isConsoleClosed = false;
+    isConsoleClosed = false;
 
     const dec = new TextDecoder();
     let consoleBuf = '';
@@ -1073,65 +955,34 @@ consoleStartButton.onclick = async () => {
         try { text = dec.decode(value as any, { stream: true }); } catch { /* fallback to raw */ }
         if (text) {
           consoleBuf += text;
-          // 1) Convert bare CR to LF (preserve existing CRLF/LF)
-          consoleBuf = consoleBuf.replace(/\r(?!\n)/g, '\n');
-          // 2) Put adjacent JSON objects on their own lines: ...}{... -> ...}\n{...
-          consoleBuf = consoleBuf.replace(/}\s*{/g, '}\n{');
-          // 3) Remove indentation spaces at start of line before a JSON object
-          consoleBuf = consoleBuf.replace(/(^|\n)[ \t]+(?=\{)/g, '$1');
-          // 4) Flush complete lines, keep last partial in buffer
-          const lines = consoleBuf.split('\n');
-          consoleBuf = lines.pop() || '';
-          const shouldAuto = autoScroll;
-          if (lines.length > 0) {
-            const flushText = lines.join('\n') + '\n';
-            // Scroll after render using write callback
-            // @ts-ignore
-            term.write(flushText, () => {
-              if (shouldAuto) {
-                try { term.scrollToBottom(); } catch {}
-              }
-            });
-          }
-        } else {
-          // Fallback for non-text chunks
-          try {
-            // @ts-ignore
-            term.write(String(value), () => {
-              if (autoScroll) {
-                try { term.scrollToBottom(); } catch {}
-              }
-            });
-          } catch {
-            // Don't force-scroll if user scrolled up
-            if (autoScroll) { try { term.scrollToBottom(); } catch {} }
+          let lineIdx = consoleBuf.lastIndexOf("\n");
+          if (lineIdx !== -1) {
+            const lines = consoleBuf.slice(0, lineIdx + 1);
+            consoleBuf = consoleBuf.slice(lineIdx + 1);
+            term.write(lines.replace(/\r?\n/g, "\r\n"));
+            try { dbg(`Console rx ${JSON.stringify(lines)}`, 'rx'); } catch {}
           }
         }
-      } catch (loopErr) {
-        // Transient read error; brief backoff then continue unless stopped
-        await new Promise(r => setTimeout(r, 50));
-      }
+      } catch (_) {}
     }
-    console.log('quitting console');
-  } catch (err) {
-    console.error('Console start failed', err);
-    term.writeln(`Error starting console: ${err?.message || err}`);
+  } catch (e) {
+    console.error(e);
+    term.writeln(`Error: ${e.message}`);
   }
 };
 
-consoleStopButton.onclick = async () => {
+// Stop console loop and restore buttons
+consoleStopButton.onclick = () => {
+  try { dbg('Console stop requested', 'info'); } catch {}
   isConsoleClosed = true;
-  // Disconnect to release reader locks so the next Start works reliably
-  if (transport) {
-    try { await transport.disconnect(); } catch {}
-    try { await transport.waitForUnlock(1500); } catch {}
-  }
-  term.reset();
-  consoleStartButton.style.display = "initial";
-  consoleStopButton.style.display = "none";
-  resetButton.style.display = "none";
-  lblConsoleFor.style.display = "none";
-  // Stay on Console tab after stopping; user can start again without switching views
+  consoleStartButton.style.display = 'initial';
+  consoleStopButton.style.display = 'none';
+  resetButton.style.display = 'none';
+};
+
+// Disconnect handler (user initiated)
+disconnectButton.onclick = async () => {
+  await handlePortDisconnected('Disconnected by user');
 };
 
 // Wire WiFi UI
@@ -1235,7 +1086,7 @@ programButton.onclick = async () => {
   progressBars.push(progressBar);
 
   row.cells[2].style.display = "initial";
-  row.cells[3].style.display = "none";
+  // No separate erase column; only show progress during flashing
 
   fileArray.push({ data: fileData, address: offset });
   }
@@ -1303,9 +1154,36 @@ programButton.onclick = async () => {
     // Hide progress bars and show erase buttons
     for (let index = 1; index < table.rows.length; index++) {
       table.rows[index].cells[2].style.display = "none";
-      table.rows[index].cells[3].style.display = "initial";
     }
   }
 };
 
-addFileButton.onclick(this);
+// Add File row creation
+function addRow(defaultOffset: string = '0x10000') {
+  const tbody = document.getElementById('tableBody') as HTMLTableSectionElement | null;
+  const tbl = table as HTMLTableElement;
+  const row = (tbody ? tbody.insertRow(-1) : tbl.insertRow(-1));
+  // Offset cell
+  const c0 = row.insertCell(0);
+  const off = document.createElement('input');
+  off.type = 'text';
+  off.value = defaultOffset;
+  off.className = 'offset-input';
+  c0.appendChild(off);
+  // File cell
+  const c1 = row.insertCell(1);
+  const inp = document.createElement('input') as HTMLInputElement & { data?: string };
+  inp.type = 'file';
+  inp.accept = '.bin,application/octet-stream';
+  inp.addEventListener('change', handleFileSelect as any);
+  c1.appendChild(inp);
+  // Progress cell
+  const c2 = row.insertCell(2);
+  c2.className = 'progress-cell';
+  const prog = document.createElement('progress') as HTMLProgressElement;
+  prog.max = 100; prog.value = 0;
+  c2.style.display = 'none';
+  c2.appendChild(prog);
+}
+
+addFileButton.onclick = () => addRow();

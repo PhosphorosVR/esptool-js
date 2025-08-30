@@ -435,6 +435,21 @@ details.advanced > summary:hover { opacity: 1; }
   border-top: none;
 }
 
+/* Debug panel styling (persistent under tabs) */
+#debugPanel { margin-top: 12px; }
+.debug-log {
+  background: #0a0f18;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  color: #cfe1ff;
+  white-space: pre-wrap;
+}
+
 /* Advanced (open state) compact styling */
 details.advanced .advanced-body {
   padding-top: 8px;
