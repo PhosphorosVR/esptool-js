@@ -31,7 +31,7 @@
                             <span class="close" onclick="this.parentElement.style.display='none'">&times;</span>
                             <span id="connectAlertMsg"></span>
                         </div>
-                        <div class="row connect-actions">
+                        <div class="row connect-actions" style="margin-bottom: 8px;">
                             <input class="btn btn-primary" type="button" id="connectButton" value="Connect" />
                             <input class="btn btn-warning" type="button" id="disconnectButton" value="Disconnect" />
                         </div>
@@ -47,9 +47,17 @@
                                             <option value="115200">115200</option>
                                         </select>
                                     </label>
+                                </div>
+                                <div class="row mt-8">
                                     <label class="toggle" for="debugLogging">
                                         <input type="checkbox" id="debugLogging" />
-                                        Show Debug log
+                                        Debug
+                                    </label>
+                                </div>
+                                <div class="row mt-8">
+                                    <label class="toggle" for="demoMode">
+                                        <input type="checkbox" id="demoMode" />
+                                        Demo mode
                                     </label>
                                 </div>
                                 <div class="row mt-8">
@@ -89,6 +97,12 @@
                                 <div class="advanced-body">
                                     <div class="row mt-8">
                                         <input class="btn btn-danger" type="button" id="eraseButton" value="Erase Flash" />
+                                    </div>
+                                    <div class="row mt-8">
+                                        <label class="toggle" for="showLegacy">
+                                            <input type="checkbox" id="showLegacy" />
+                                            Show legacy firmware
+                                        </label>
                                     </div>
                                     <table id="fileTable">
                                         <thead>

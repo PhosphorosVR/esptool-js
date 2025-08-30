@@ -5,13 +5,15 @@
   "source": "src/index.html",
   "scripts": {
     "build": "npm-run-all clean genDocs parcel:build",
-    "clean": "shx rm -rf dist .parcel-cache",
+  "clean": "npm-run-all -s -c clean:dist clean:cache",
   "dev": "npm-run-all clean genDocs copy:binaries parcel:dev",
   "genDocs": "npm run genDocs:root && shx mkdir -p dist && shx cp -r ../../docs dist",
   "copy:binaries": "shx mkdir -p dist/binaries && shx cp -r src/binaries/* dist/binaries/ || echo no bins",
     "genDocs:root": "cd ../.. && npm run genDocs",
     "parcel:dev": "cross-env PARCEL_WORKERS=0 parcel src/index.html",
   "parcel:build": "cross-env PARCEL_WORKERS=0 parcel build src/index.html --no-optimize --public-url ./ && npm run copy:binaries",
+  "clean:dist": "shx rm -rf dist",
+  "clean:cache": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path .parcel-cache) { try { Remove-Item -Recurse -Force .parcel-cache -ErrorAction Stop } catch { Write-Host 'cache busy, retry soft clean'; Get-ChildItem .parcel-cache -Recurse -Force | Remove-Item -Force -ErrorAction SilentlyContinue } }\" || shx rm -rf .parcel-cache || echo .parcel-cache busy, skipped",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "parcelIgnore": [

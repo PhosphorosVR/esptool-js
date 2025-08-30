@@ -1,5 +1,5 @@
 {
   "items": [
-    { "name": "FFVR Face [v1.0.0].bin", "file": "FFVR_Face.bin", "address": "0x0" }
+  { "file": "FFVR_Face.bin", "address": "0x0" }
   ]
 }

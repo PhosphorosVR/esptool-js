@@ -46,6 +46,7 @@ function hideConnectAlert() {
 }
 
 const debugLogging = document.getElementById("debugLogging") as HTMLInputElement;
+const demoModeEl = document.getElementById("demoMode") as HTMLInputElement | null;
 
 function switchToConsoleTab() {
   const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
@@ -391,6 +392,74 @@ consoleStopButton.style.display = "none";
 resetButton.style.display = "none";
 filesDiv.style.display = "none";
 
+// --- Demo mode helpers ---
+function setTabsEnabled(enabled: boolean) {
+  try {
+    const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
+    const tabConsole = document.querySelector('#tabs .tab[data-target="console"]') as HTMLElement | null;
+    const tabTools = document.querySelector('#tabs .tab[data-target="tools"]') as HTMLElement | null;
+    [tabProgram, tabConsole, tabTools].forEach(t => t && t.classList.toggle('disabled', !enabled));
+  } catch {}
+}
+
+function enterDemoMode() {
+  // Simulate connected UI without a real transport
+  isConnected = true;
+  // @ts-ignore
+  (window as any).isConnected = true;
+  updateConnStatusDot(true);
+  try {
+    if (lblConnTo) {
+      lblConnTo.innerHTML = 'Connected: Demo device · 921600 baud';
+      lblConnTo.style.display = 'block';
+    }
+    lblBaudrate && (lblBaudrate.style.display = 'none');
+    baudrates && ((baudrates as any).style.display = 'none');
+    connectButton.style.display = 'none';
+    disconnectButton.style.display = 'initial';
+    traceButton.style.display = 'initial';
+    eraseButton.style.display = 'initial';
+    filesDiv.style.display = 'initial';
+  } catch {}
+  setTabsEnabled(true);
+  // Switch to Flashing tab to show content
+  const tabProgram = document.querySelector('#tabs .tab[data-target="program"]') as HTMLElement | null;
+  if (tabProgram) tabProgram.click();
+}
+
+function exitDemoMode() {
+  // Revert to disconnected UI
+  isConnected = false;
+  // @ts-ignore
+  (window as any).isConnected = false;
+  updateConnStatusDot(false);
+  try {
+    lblBaudrate && (lblBaudrate.style.display = 'initial');
+    baudrates && ((baudrates as any).style.display = 'initial');
+    connectButton.style.display = 'initial';
+    disconnectButton.style.display = 'none';
+    traceButton.style.display = 'none';
+    eraseButton.style.display = 'none';
+    if (lblConnTo) lblConnTo.style.display = 'none';
+    filesDiv.style.display = 'none';
+    alertDiv && (alertDiv.style.display = 'none');
+  } catch {}
+  setTabsEnabled(false);
+  // Hide sections; Connect card remains
+  ['program','console','tools'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) (el as HTMLElement).style.display = 'none';
+  });
+}
+
+if (demoModeEl) {
+  demoModeEl.addEventListener('change', () => {
+    if (demoModeEl.checked) enterDemoMode(); else exitDemoMode();
+  });
+  // If enabled on load, immediately enter demo mode
+  if (demoModeEl.checked) enterDemoMode();
+}
+
 function extractDeviceInfo(dev: any): { serial?: string; product?: string; manufacturer?: string; comName?: string } {
   const out: { serial?: string; product?: string; manufacturer?: string; comName?: string } = {};
   try {
@@ -466,7 +535,9 @@ const espLoaderTerminal = {
 // Load prebuilt firmware list dynamically from ./binaries at runtime
 // 1) Try ./binaries/manifest.json (simple JSON you can edit in dist without rebuild)
 // 2) If not found, try to parse directory listing HTML of ./binaries/ for *.bin files
-let prebuiltItems: Array<{ name?: string; file: string; address?: string }> = [];
+type FirmwareItem = { name?: string; file: string; address?: string; source?: 'binaries' | 'legacy' };
+let prebuiltItems: Array<FirmwareItem> = [];
+let legacyItems: Array<FirmwareItem> = [];
 async function fetchJson(url: string) {
   try {
     const res = await fetch(url, { cache: "no-store" });
@@ -498,7 +569,18 @@ async function loadPrebuiltManifest() {
     // 1) Preferred: plain file next to the built app
     const json = await fetchJson("./binaries/manifest.json");
     if (Array.isArray(json?.items)) {
-      prebuiltItems = json.items;
+      prebuiltItems = json.items
+        .map((it: any) => {
+          if (typeof it === 'string') {
+            const file = it;
+            return { file, name: file, address: parseAddrFromName(file), source: 'binaries' } as FirmwareItem;
+          }
+          const file = it?.file || (typeof it?.name === 'string' && it.name.endsWith('.bin') ? it.name : undefined);
+          if (!file) return null;
+          const address = it?.address ?? parseAddrFromName(file);
+          return { file, name: it?.name, address, source: 'binaries' } as FirmwareItem;
+        })
+        .filter(Boolean) as FirmwareItem[];
     } else {
       // 2) Fallback: try directory listing (works on some static servers)
       const html = await fetchText("./binaries/");
@@ -520,11 +602,28 @@ async function loadPrebuiltManifest() {
           file,
           name: file,
           address: parseAddrFromName(file),
+          source: 'binaries',
         }));
       } else {
         prebuiltItems = [];
       }
     }
+    // Move any entries that were accidentally listed under binaries with a 'legacy/' prefix over to legacyItems
+    try {
+      const movedToLegacy: FirmwareItem[] = [];
+      prebuiltItems = prebuiltItems.filter((it) => {
+        if (typeof it.file === 'string' && it.file.startsWith('legacy/')) {
+          const basename = it.file.replace(/^legacy\//, '');
+          movedToLegacy.push({ ...it, file: basename, source: 'legacy' });
+          return false;
+        }
+        return true;
+      });
+      if (movedToLegacy.length) {
+        legacyItems = [...movedToLegacy, ...legacyItems];
+      }
+    } catch {}
+
     if (prebuiltSelect) {
       // Clear existing options except placeholder
       for (let i = prebuiltSelect.options.length - 1; i >= 1; i--) {
@@ -533,9 +632,10 @@ async function loadPrebuiltManifest() {
       prebuiltItems.forEach((it, idx) => {
         const opt = document.createElement("option");
         opt.value = String(idx);
-        const label = it.name || it.file;
+        // Always show the filename as label as requested
+        const label = it.file;
         opt.textContent = label;
-        opt.title = label; // show full name on hover
+        opt.title = it.source === 'legacy' ? `${label} (legacy)` : label; // show source on hover
         prebuiltSelect.appendChild(opt);
       });
     }
@@ -544,6 +644,85 @@ async function loadPrebuiltManifest() {
   }
 }
 loadPrebuiltManifest();
+
+// Load legacy firmware list (similar flow as binaries)
+async function loadLegacyManifest() {
+  try {
+  const json = await fetchJson("./binaries/legacy/manifest.json");
+    if (Array.isArray(json?.items)) {
+      legacyItems = json.items
+        .map((it: any) => {
+          if (typeof it === 'string') {
+            const file = it;
+            return { file, name: file, address: parseAddrFromName(file), source: 'legacy' } as FirmwareItem;
+          }
+          const file = it?.file || (typeof it?.name === 'string' && it.name.endsWith('.bin') ? it.name : undefined);
+          if (!file) return null;
+          const address = it?.address ?? parseAddrFromName(file);
+          return { file, name: it?.name, address, source: 'legacy' } as FirmwareItem;
+        })
+        .filter(Boolean) as FirmwareItem[];
+    } else {
+  const html = await fetchText("./binaries/legacy/");
+      if (html) {
+        const binSet = new Set<string>();
+        const re = /href=\"([^\"]+\.bin)\"/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(html))) {
+          let href = m[1];
+          if (href.startsWith("http") || href.startsWith("//")) continue;
+          if (href.startsWith("/")) continue;
+          href = href.replace(/^\.\//, "");
+          if (href.includes("/")) continue;
+          binSet.add(href);
+        }
+        legacyItems = Array.from(binSet).sort().map((file) => ({
+          file,
+          name: file,
+          address: parseAddrFromName(file),
+          source: 'legacy',
+        }));
+      } else {
+        legacyItems = [];
+      }
+    }
+  } catch (_) {
+    legacyItems = [];
+  }
+}
+
+const showLegacyEl = document.getElementById('showLegacy') as HTMLInputElement | null;
+if (showLegacyEl) {
+  showLegacyEl.addEventListener('change', async () => {
+    if (showLegacyEl.checked) {
+      if (!legacyItems.length) await loadLegacyManifest();
+      // Merge legacy at the bottom
+      const combined = [...prebuiltItems, ...legacyItems];
+      // Rebuild dropdown options using filenames
+      for (let i = prebuiltSelect.options.length - 1; i >= 1; i--) {
+        prebuiltSelect.remove(i);
+      }
+      combined.forEach((it, idx) => {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        opt.textContent = it.file;
+        opt.title = it.source === 'legacy' ? `${it.file} (legacy)` : it.file;
+        prebuiltSelect.appendChild(opt);
+      });
+      // Keep a shadow copy that program uses based on index mapping
+      // Overwrite prebuiltItems reference to combined for selection consistency
+      prebuiltItems = combined;
+    } else {
+      // Revert to only prebuilt list
+      await loadPrebuiltManifest();
+    }
+  });
+  // If the checkbox is already enabled on load, populate immediately
+  if (showLegacyEl.checked) {
+    // Trigger the same logic as on change to ensure options include legacy
+    showLegacyEl.dispatchEvent(new Event('change'));
+  }
+}
 
 connectButton.onclick = async () => {
   try {
@@ -761,6 +940,12 @@ async function handlePortDisconnected(msg?: string) {
 }
 
 disconnectButton.onclick = async () => {
+  // If demo mode was active, just exit it without touching transport
+  if (demoModeEl && demoModeEl.checked) {
+    demoModeEl.checked = false;
+    exitDemoMode();
+    return;
+  }
   if (transport) await transport.disconnect();
   stopPortPresenceMonitor();
 
@@ -1035,7 +1220,8 @@ programButton.onclick = async () => {
       const idx = parseInt(prebuiltSelect.value, 10);
       const item = prebuiltItems[idx];
       if (item && item.file) {
-        const res = await fetch(`./binaries/${item.file}`, { cache: "no-store" });
+  const base = item.source === 'legacy' ? './binaries/legacy' : './binaries';
+  const res = await fetch(`${base}/${item.file}`, { cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.blob();
         const arrayBuf = await blob.arrayBuffer();
